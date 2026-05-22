@@ -1,14 +1,17 @@
 import re
 import bitarray as bitLib
+from .openings import opening_to_bits, OPENING_BITS, OPENING_UNKNOWN
 from .types import (
     headers_bit_encoding,
     result_to_bits, termination_to_bits, title_to_bits, eco_letter_to_bits,
+    event_to_bits, EVENT_BITS, EVENT_UNKNOWN,
     ELO_BITS, ELO_UNKNOWN, ELO_MAX_VALID,
     RATING_DIFF_MAG_BITS, RATING_DIFF_UNKNOWN_MAG, RATING_DIFF_MAX_MAG,
     UTC_DATE_BASE_YEAR, UTC_DATE_YEAR_BITS, UTC_DATE_MONTH_BITS, UTC_DATE_DAY_BITS,
     UTC_DATE_UNKNOWN_YEAR,
     UTC_TIME_BITS, UTC_TIME_UNKNOWN,
     TIME_CONTROL_BASE_BITS, TIME_CONTROL_INC_BITS, TIME_CONTROL_UNKNOWN_BASE,
+    SITE_PREFIX, SITE_ID_LEN, SITE_CHAR_BITS, SITE_CHAR_TO_IDX, SITE_UNKNOWN,
     RAW_STRING_LEN_BITS,
 )
 
@@ -106,6 +109,29 @@ def encode_utc_time(value: str) -> bitLib.bitarray:
     return _int_bits(UTC_TIME_UNKNOWN, UTC_TIME_BITS) + _raw_string(value)
 
 
+def encode_opening(value: str) -> bitLib.bitarray:
+    if value in opening_to_bits and value != "UNKNOWN_TEXT":
+        return bitLib.bitarray(opening_to_bits[value])
+    return bitLib.bitarray(opening_to_bits["UNKNOWN_TEXT"]) + _raw_string(value)
+
+
+def encode_event(value: str) -> bitLib.bitarray:
+    if value in event_to_bits and value != "UNKNOWN_TEXT":
+        return bitLib.bitarray(event_to_bits[value])
+    return bitLib.bitarray(event_to_bits["UNKNOWN_TEXT"]) + _raw_string(value)
+
+
+def encode_site(value: str) -> bitLib.bitarray:
+    if value.startswith(SITE_PREFIX):
+        game_id = value[len(SITE_PREFIX):]
+        if len(game_id) == SITE_ID_LEN and all(c in SITE_CHAR_TO_IDX for c in game_id):
+            bits = bitLib.bitarray()
+            for c in game_id:
+                bits.extend(_int_bits(SITE_CHAR_TO_IDX[c], SITE_CHAR_BITS))
+            return bits
+    return _int_bits(SITE_UNKNOWN, SITE_CHAR_BITS) + _raw_string(value)
+
+
 def encode_time_control(value: str) -> bitLib.bitarray:
     try:
         base_str, inc_str = value.split("+")
@@ -130,6 +156,9 @@ VALUE_ENCODERS = {
     "UTCDate":         encode_utc_date,
     "UTCTime":         encode_utc_time,
     "TimeControl":     encode_time_control,
+    "Site":            encode_site,
+    "Event":           encode_event,
+    "Opening":         encode_opening,
 }
 
 

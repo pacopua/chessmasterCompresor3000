@@ -1,13 +1,16 @@
 import bitarray as bitLib
+from .openings import bits_to_opening, OPENING_BITS, OPENING_UNKNOWN
 from .types import (
     headers_bit_decoding,
     bits_to_result, bits_to_termination, bits_to_title, bits_to_eco_letter,
+    bits_to_event, EVENT_BITS, EVENT_UNKNOWN,
     ELO_BITS, ELO_UNKNOWN,
     RATING_DIFF_MAG_BITS, RATING_DIFF_UNKNOWN_MAG,
     UTC_DATE_BASE_YEAR, UTC_DATE_YEAR_BITS, UTC_DATE_MONTH_BITS, UTC_DATE_DAY_BITS,
     UTC_DATE_UNKNOWN_YEAR,
     UTC_TIME_BITS, UTC_TIME_UNKNOWN,
     TIME_CONTROL_BASE_BITS, TIME_CONTROL_INC_BITS, TIME_CONTROL_UNKNOWN_BASE,
+    SITE_PREFIX, SITE_ID_LEN, SITE_CHAR_BITS, SITE_IDX_TO_CHAR, SITE_UNKNOWN,
     RAW_STRING_LEN_BITS,
 )
 
@@ -95,6 +98,31 @@ def decode_utc_time(bits: bitLib.bitarray, pos: int) -> tuple[str, int]:
     return f"{h:02d}:{m:02d}:{s:02d}", pos
 
 
+def decode_opening(bits: bitLib.bitarray, pos: int) -> tuple[str, int]:
+    value, pos = _read_int(bits, pos, OPENING_BITS)
+    if value == OPENING_UNKNOWN:
+        return _read_raw_string(bits, pos)
+    return bits_to_opening[format(value, f"0{OPENING_BITS}b")], pos
+
+
+def decode_event(bits: bitLib.bitarray, pos: int) -> tuple[str, int]:
+    value, pos = _read_int(bits, pos, EVENT_BITS)
+    if value == EVENT_UNKNOWN:
+        return _read_raw_string(bits, pos)
+    return bits_to_event[format(value, f"0{EVENT_BITS}b")], pos
+
+
+def decode_site(bits: bitLib.bitarray, pos: int) -> tuple[str, int]:
+    first, _ = _read_int(bits, pos, SITE_CHAR_BITS)
+    if first == SITE_UNKNOWN:
+        return _read_raw_string(bits, pos + SITE_CHAR_BITS)
+    game_id = ""
+    for _ in range(SITE_ID_LEN):
+        idx, pos = _read_int(bits, pos, SITE_CHAR_BITS)
+        game_id += SITE_IDX_TO_CHAR[idx]
+    return SITE_PREFIX + game_id, pos
+
+
 def decode_time_control(bits: bitLib.bitarray, pos: int) -> tuple[str, int]:
     base, pos = _read_int(bits, pos, TIME_CONTROL_BASE_BITS)
     if base == TIME_CONTROL_UNKNOWN_BASE:
@@ -116,6 +144,9 @@ VALUE_DECODERS = {
     "UTCDate":         decode_utc_date,
     "UTCTime":         decode_utc_time,
     "TimeControl":     decode_time_control,
+    "Site":            decode_site,
+    "Event":           decode_event,
+    "Opening":         decode_opening,
 }
 
 

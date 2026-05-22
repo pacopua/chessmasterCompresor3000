@@ -110,6 +110,80 @@ TIME_CONTROL_BASE_BITS    = 14
 TIME_CONTROL_INC_BITS     = 7
 TIME_CONTROL_UNKNOWN_BASE = (1 << TIME_CONTROL_BASE_BITS) - 1   # 16383  →  raw UTF-8 follows
 
+# Event: 6 bits — index 63 (all 1s) = UNKNOWN_TEXT sentinel
+# Values ordered by frequency so the most common get the smallest indices,
+# which helps if an entropy-coding layer is added later.
+_EVENT_STRINGS = [
+    "Rated Blitz game",
+    "Rated Classical game",
+    "Rated Bullet game",
+    "Rated Correspondence game",
+    "Rated Bullet tournament https://lichess.org/tournament/eJuOmDtR",
+    "Rated Classical tournament https://lichess.org/tournament/riSmNP1H",
+    "Rated Bullet tournament https://lichess.org/tournament/BFF1WBYs",
+    "Rated Blitz tournament https://lichess.org/tournament/rPTa1eCG",
+    "Rated Bullet tournament https://lichess.org/tournament/U2hkwBoK",
+    "Rated Blitz tournament https://lichess.org/tournament/vPqL4MHt",
+    "Rated Classical tournament https://lichess.org/tournament/apah3ohD",
+    "Rated Blitz tournament https://lichess.org/tournament/9sxfYO8r",
+    "Rated Blitz tournament https://lichess.org/tournament/UnmOkHnO",
+    "Rated Blitz tournament https://lichess.org/tournament/2WQWjpVr",
+    "Rated Blitz tournament https://lichess.org/tournament/lYCPRxNZ",
+    "Rated Classical tournament https://lichess.org/tournament/nw02CTYi",
+    "Rated Blitz tournament https://lichess.org/tournament/vRCsJQ8u",
+    "Rated Blitz tournament https://lichess.org/tournament/3Ic7BIiC",
+    "Rated Blitz tournament https://lichess.org/tournament/1TLHHMb1",
+    "Rated Blitz tournament https://lichess.org/tournament/lOL4IauU",
+    "Rated Blitz tournament https://lichess.org/tournament/RMWGlxes",
+    "Rated Classical tournament https://lichess.org/tournament/mWvUjjXT",
+    "Rated Bullet tournament https://lichess.org/tournament/lAGrIoiW",
+    "Rated Blitz tournament https://lichess.org/tournament/0dbHoY88",
+    "Rated Blitz tournament https://lichess.org/tournament/0EBP60tX",
+    "Rated Blitz tournament https://lichess.org/tournament/uzgRZ9IA",
+    "Rated Bullet tournament https://lichess.org/tournament/GtGzTF8O",
+    "Rated Bullet tournament https://lichess.org/tournament/y5UqP1by",
+    "Rated Blitz tournament https://lichess.org/tournament/27DAKVR1",
+    "Rated Blitz tournament https://lichess.org/tournament/l1r0rZa9",
+    "Rated Blitz tournament https://lichess.org/tournament/DoIGjlbp",
+    "Rated Bullet tournament https://lichess.org/tournament/YToLeY1g",
+    "Rated Bullet tournament https://lichess.org/tournament/xXcqfQgR",
+    "Rated Blitz tournament https://lichess.org/tournament/ydvesvai",
+    "Rated Blitz tournament https://lichess.org/tournament/MlbPnVjD",
+    "Rated Bullet tournament https://lichess.org/tournament/if2eqc3O",
+    "Rated Blitz tournament https://lichess.org/tournament/115UbdfR",
+    "Rated Classical tournament https://lichess.org/tournament/HyT8DUrp",
+    "Rated Blitz tournament https://lichess.org/tournament/02had06t",
+    "Rated Bullet tournament https://lichess.org/tournament/68gjypew",
+    "Rated Blitz tournament https://lichess.org/tournament/i1fiwlgk",
+    "Rated Blitz tournament https://lichess.org/tournament/xpwue0nd",
+    "Rated Blitz tournament https://lichess.org/tournament/hvPdb8ps",
+    "Rated Blitz tournament https://lichess.org/tournament/9zgf350e",
+    "Rated Blitz tournament https://lichess.org/tournament/wCoi5XXP",
+    "Rated Bullet tournament https://lichess.org/tournament/THT5fc36",
+    "Rated Blitz tournament https://lichess.org/tournament/wabLyQbF",
+    "Rated Blitz tournament https://lichess.org/tournament/xF4zE8tl",
+    "Rated Blitz tournament https://lichess.org/tournament/FrHTzWue",
+    "Rated Classical tournament https://lichess.org/tournament/rIxo1iu2",
+]
+EVENT_BITS = 6
+EVENT_UNKNOWN = (1 << EVENT_BITS) - 1   # 63 → raw UTF-8 follows
+event_to_bits: dict[str, bitLib.bitarray] = {
+    s: bitLib.bitarray(format(i, f"0{EVENT_BITS}b")) for i, s in enumerate(_EVENT_STRINGS)
+}
+event_to_bits["UNKNOWN_TEXT"] = bitLib.bitarray(format(EVENT_UNKNOWN, f"0{EVENT_BITS}b"))
+bits_to_event: dict[str, str] = {v.to01(): k for k, v in event_to_bits.items()}
+
+# Site: strip constant prefix, encode the 8-char base62 game ID
+# Characters [0-9A-Za-z] map to indices 0–61 (6 bits each, covers 0–63)
+# Index 63 (all 1s) = UNKNOWN_TEXT sentinel — raw UTF-8 follows
+SITE_PREFIX     = "https://lichess.org/"
+SITE_ID_LEN     = 8
+SITE_CHAR_BITS  = 6
+SITE_CHARS      = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+SITE_CHAR_TO_IDX: dict[str, int] = {c: i for i, c in enumerate(SITE_CHARS)}
+SITE_IDX_TO_CHAR: dict[int, str] = {i: c for i, c in enumerate(SITE_CHARS)}
+SITE_UNKNOWN    = (1 << SITE_CHAR_BITS) - 1   # 63 → raw UTF-8 follows
+
 # Raw-string encoding used by all UNKNOWN_TEXT sentinels:
 #   8-bit byte-length  +  N bytes UTF-8
 RAW_STRING_LEN_BITS = 8
