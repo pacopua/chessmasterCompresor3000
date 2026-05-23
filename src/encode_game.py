@@ -26,7 +26,7 @@ import bitarray as bitLib
 from .encode_headers import encode_headers
 from .decode_headers import decode_headers
 
-MAGIC    = b'CPG3'
+MAGIC    = b'CPG4'
 GAME_SEP = 0xFF   # separates games inside the tokenized move stream
 
 # Single-byte move tokens
@@ -411,31 +411,31 @@ def encode_pgn_file(input_path: str, output_path: str) -> None:
     games = _split_pgn_games(text)
     print(f"  {len(games)} games")
 
-    # --- Headers (compact bit encoding) ---
+    # --- Headers: compact bit encoding, stored RAW (no LZW) ---
     header_bits = bitLib.bitarray()
     for headers, _ in games:
         header_bits.extend(encode_headers(headers))
 
-    # --- Moves (tokenize each game independently, then pack with length prefixes) ---
+    # --- Moves: tokenize per game, pack with length prefixes ---
     game_toks = [bytes(_tokenize_moves(moves)) for _, moves in games]
     all_tok   = _pack_game_tokens(game_toks)
 
-    # --- LZW + Huffman on headers + moves combined ---
-    # Header bytes come first; n_bits stored in the file lets the decoder split them back.
-    combined = header_bits.tobytes() + all_tok
-    lzw_syms = _lzw_compress(combined)
+    # --- LZW + Huffman on moves ONLY ---
+    lzw_syms = _lzw_compress(all_tok)
     freqs    = Counter(lzw_syms)
     tree     = _build_tree(freqs)
     codes    = _get_codes(tree)
     comp_bytes, padding = _huffman_encode(lzw_syms, codes)
 
-    # --- Write ---
     sorted_syms = sorted(freqs)
     with open(output_path, 'wb') as f:
         f.write(MAGIC)
 
-        f.write(struct.pack('>I', len(header_bits)))   # bits, not bytes — lets decoder trim padding
+        # Header section: raw bit count + raw bytes
+        f.write(struct.pack('>I', len(header_bits)))
+        f.write(header_bits.tobytes())
 
+        # Move section: Huffman table + compressed data
         f.write(struct.pack('>I', len(sorted_syms)))
         f.write(struct.pack('>I', len(lzw_syms)))
         prev = 0
@@ -443,7 +443,6 @@ def encode_pgn_file(input_path: str, output_path: str) -> None:
             f.write(_write_vlq(sym - prev))
             f.write(_write_vlq(freqs[sym]))
             prev = sym
-
         f.write(struct.pack('>B', padding))
         f.write(comp_bytes)
 
@@ -457,13 +456,23 @@ def decode_pgn_file(input_path: str, output_path: str) -> None:
         raw = f.read()
 
     pos = 0
-    assert raw[pos:pos+4] == MAGIC, "Not a CPG3 file"
+    assert raw[pos:pos+4] == MAGIC, "Not a CPG4 file"
     pos += 4
 
-    n_bits    = struct.unpack_from('>I', raw, pos)[0]; pos += 4
+    # --- Header section: raw bits ---
+    n_bits      = struct.unpack_from('>I', raw, pos)[0]; pos += 4
     n_hdr_bytes = (n_bits + 7) // 8
+    hdr_ba = bitLib.bitarray()
+    hdr_ba.frombytes(raw[pos:pos + n_hdr_bytes]); pos += n_hdr_bytes
+    del hdr_ba[n_bits:]  # trim byte-alignment padding
 
-    # --- Huffman table ---
+    game_headers: list[str] = []
+    hpos = 0
+    while hpos < n_bits:
+        hdr, hpos = decode_headers(hdr_ba, hpos)
+        game_headers.append(hdr)
+
+    # --- Move section: LZW+Huffman ---
     n_entries  = struct.unpack_from('>I', raw, pos)[0]; pos += 4
     total_syms = struct.unpack_from('>I', raw, pos)[0]; pos += 4
     freqs: dict = {}
@@ -475,28 +484,14 @@ def decode_pgn_file(input_path: str, output_path: str) -> None:
         freqs[sym] = freq
         prev = sym
 
-    tree = _build_tree(freqs)
-
-    # --- Decompress combined stream ---
+    tree     = _build_tree(freqs)
     padding  = raw[pos]; pos += 1
     lzw_syms = _huffman_decode(raw[pos:], padding, tree, total_syms)
-    combined = _lzw_decompress(lzw_syms)
+    all_tok  = _lzw_decompress(lzw_syms)
 
-    # --- Split: first n_hdr_bytes → headers, rest → tokenized moves ---
-    hdr_ba = bitLib.bitarray()
-    hdr_ba.frombytes(combined[:n_hdr_bytes])
-    del hdr_ba[n_bits:]   # trim byte-alignment padding
-
-    game_headers: list[str] = []
-    hpos = 0
-    while hpos < n_bits:
-        hdr, hpos = decode_headers(hdr_ba, hpos)
-        game_headers.append(hdr)
-
-    chunks     = _unpack_game_tokens(combined[n_hdr_bytes:])
+    chunks     = _unpack_game_tokens(all_tok)
     game_moves = [_detokenize_moves(chunk) for chunk in chunks]
 
-    # --- Reconstruct PGN ---
     out_games = [f"{hdr}\n\n{mv}" for hdr, mv in zip(game_headers, game_moves)]
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write('\n\n'.join(out_games))
