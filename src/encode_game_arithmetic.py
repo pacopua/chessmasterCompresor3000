@@ -34,7 +34,8 @@ from .encode_game import (
     _detokenize_moves,
     _lzw_compress,
     _lzw_decompress,
-    GAME_SEP,
+    _pack_game_tokens,
+    _unpack_game_tokens,
 )
 from .arithmetic import encode_ints, decode_ints
 from .encode_game import _write_vlq, _read_vlq
@@ -54,15 +55,12 @@ def encode_pgn_file(input_path: str, output_path: str) -> None:
     for headers, _ in games:
         header_bits.extend(encode_headers(headers))
 
-    # --- Moves (tokenize all games, separated by GAME_SEP) ---
-    all_tok = bytearray()
-    for i, (_, moves) in enumerate(games):
-        all_tok.extend(_tokenize_moves(moves))
-        if i < len(games) - 1:
-            all_tok.append(GAME_SEP)
+    # --- Moves (tokenize each game, pack with length prefixes) ---
+    game_toks = [bytes(_tokenize_moves(moves)) for _, moves in games]
+    all_tok   = _pack_game_tokens(game_toks)
 
     # --- LZW over combined stream ---
-    combined = header_bits.tobytes() + bytes(all_tok)
+    combined = header_bits.tobytes() + all_tok
     lzw_syms = _lzw_compress(combined)
 
     # --- Frequency model on the integer LZW symbols ---
@@ -133,8 +131,7 @@ def decode_pgn_file(input_path: str, output_path: str) -> None:
         hdr, hpos = decode_headers(hdr_ba, hpos)
         game_headers.append(hdr)
 
-    all_tok    = combined[n_hdr_bytes:]
-    chunks     = bytes(all_tok).split(bytes([GAME_SEP]))
+    chunks     = _unpack_game_tokens(combined[n_hdr_bytes:])
     game_moves = [_detokenize_moves(chunk) for chunk in chunks]
 
     # --- Reconstruct PGN ---
