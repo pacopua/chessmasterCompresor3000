@@ -89,12 +89,10 @@ def _encode_annot_bytes(content: bytes) -> bytes:
 
 def _encode_game(moves_text: str) -> bytes:
     """Encode one game's move text → move block bytes."""
-    # initialize the board to emulate
     board = chess.Board()
     raw   = moves_text.encode('latin-1')
 
-    # the games may include annotiation blocks like
-    #{annotation}; replace each with DEL (0x7F) as a placeholder
+    # Extract {annotation} blocks; replace each with DEL (0x7F) placeholder
     annot_queue: list[bytes] = []
     def _pull(m: re.Match) -> bytes:
         annot_queue.append(m.group(1))
@@ -109,7 +107,6 @@ def _encode_game(moves_text: str) -> bytes:
     for tok in raw.split():
         tok_s = tok.decode('latin-1', errors='replace')
 
-        # Any text in the following categories is ignored for move parsing and not included in the bit-packed data, since it doesn't affect the board state:
         if tok == b'\x7f':                           # annotation placeholder
             if plies:
                 plies[-1][1] = _encode_annot_bytes(annot_queue[annot_idx])
@@ -144,11 +141,9 @@ def _encode_game(moves_text: str) -> bytes:
     board2 = chess.Board()
     bits   = bitLib.bitarray()
     for move, annot in plies:
-        # given the current state of the board, what moves are legal?
         legal = list(board2.legal_moves)
         n     = len(legal)
         idx   = next(i for i, m in enumerate(legal) if m == move)
-        # esto es el numero minimo de bits necesario para codificar esta cantidad de movimientos! El decodificador hará lo mismo para saber cuántos bits tiene que leer
         width = math.ceil(math.log2(n)) if n > 1 else 0
         if width:
             bits.extend(format(idx, f'0{width}b'))
@@ -172,19 +167,16 @@ def encode_pgn_file_chess(input_path: str, output_path: str) -> None:
     with open(input_path, 'r', encoding='utf-8') as f:
         text = f.read()
 
-    # separate the games into a list of text! 
     games = _split_pgn_games(text)
     print(f"  {len(games)} games")
 
     header_bits = bitLib.bitarray()
     for hdr, _ in games:
-        # bit encoding for the headers
         header_bits.extend(encode_headers(hdr))
 
     move_blocks: list[bytes] = []
     for i, (_, mv) in enumerate(games):
         try:
-            # encode game using chess-python
             move_blocks.append(_encode_game(mv))
         except Exception as e:
             print(f"  WARNING game {i+1}: {e}")

@@ -17,7 +17,7 @@ from .types import (
 
 _HEADER_RE = re.compile(r'\[(\w+)\s+"([^"]*)"\]')
 
-# This function is here for the sections that cannot be encoded. Or also for the values we don't take into account. Each tag from the header has a set of values accounted for, but if the value is not in that set, we encode it as UNKNOWN_TEXT and then the raw UTF-8 string, in that case the decoder will jus read the string as normal and that is that!
+
 def _raw_string(value: str) -> bitLib.bitarray:
     """8-bit byte-length followed by the UTF-8 bytes."""
     raw = value.encode("utf-8")
