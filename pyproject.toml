@@ -8,4 +8,5 @@ dependencies = [
     "bitarray>=3.8.1",
     "ipykernel>=7.2.0",
     "jupyterlab>=4.5.7",
+    "python-chess>=1.999",
 ]
