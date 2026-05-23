@@ -141,7 +141,7 @@ def _encode_game(moves_text: str) -> bytes:
     board2 = chess.Board()
     bits   = bitLib.bitarray()
     for move, annot in plies:
-        legal = sorted(board2.legal_moves, key=lambda m: m.uci())
+        legal = list(board2.legal_moves)
         n     = len(legal)
         idx   = next(i for i, m in enumerate(legal) if m == move)
         width = math.ceil(math.log2(n)) if n > 1 else 0
@@ -243,7 +243,7 @@ def _decode_game(block: bytes) -> str:
     ply_info: list[tuple[chess.Move, bool]] = []
 
     for _ in range(ply_count):
-        legal = sorted(board.legal_moves, key=lambda m: m.uci())
+        legal = list(board.legal_moves)
         n     = len(legal)
         width = math.ceil(math.log2(n)) if n > 1 else 0
         if width:
