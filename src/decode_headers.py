@@ -1,6 +1,6 @@
 import bitarray as bitLib
 from .openings import bits_to_opening, OPENING_BITS, OPENING_UNKNOWN
-from .types import (
+from .constant_types import (
     headers_bit_decoding,
     bits_to_result, bits_to_termination, bits_to_title, bits_to_eco_letter,
     bits_to_event, EVENT_BITS, EVENT_UNKNOWN,

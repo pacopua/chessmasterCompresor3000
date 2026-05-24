@@ -52,6 +52,7 @@ for pgn_path in pgn_files:
             t0 = time.perf_counter()
             encode_pgn_file_chess(pgn_path, enc1)
             enc_time = time.perf_counter() - t0
+                
 
             t0 = time.perf_counter()
             decode_pgn_file_chess(enc1, dec1)
@@ -60,6 +61,13 @@ for pgn_path in pgn_files:
             encode_pgn_file_chess(dec1, enc2)
     except Exception as e:
         print(f"{name:<25}  ERROR: {e}")
+
+        orig_size = os.path.getsize(pgn_path)
+        comp_size = os.path.getsize(enc1)
+        ratio     = orig_size / comp_size
+        orig_kb   = orig_size / 1024
+        print(f"TIME TO ENCODE: {enc_time} KB/s: {orig_kb/enc_time}")
+
         all_pass5 = False
         continue
 

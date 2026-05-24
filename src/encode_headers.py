@@ -1,7 +1,7 @@
 import re
 import bitarray as bitLib
 from .openings import opening_to_bits, OPENING_BITS, OPENING_UNKNOWN
-from .types import (
+from .constant_types import (
     headers_bit_encoding,
     result_to_bits, termination_to_bits, title_to_bits, eco_letter_to_bits,
     event_to_bits, EVENT_BITS, EVENT_UNKNOWN,
