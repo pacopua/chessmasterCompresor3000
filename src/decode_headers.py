@@ -2,6 +2,7 @@ from datetime import date as _date, timedelta as _timedelta
 import bitarray as bitLib
 from .huffman import huffman_decode
 from .openings import bits_to_opening
+from .player_names import bits_to_char, NAME_LENGTH_BITS, index_width
 from .constant_types import (
     headers_bit_decoding,
     bits_to_result, bits_to_termination, bits_to_title, bits_to_eco_letter,
@@ -186,6 +187,34 @@ def decode_time_control(bits: bitLib.bitarray, pos: int) -> tuple[str, int]:
     return f"{base}+{inc}", pos
 
 
+def decode_player_name(bits: bitLib.bitarray, pos: int, name_list: list[str]) -> tuple[str, int]:
+    """LZ78-style dict + character-Huffman decoder for White/Black player names.
+
+    name_list is mutated in place: new names are appended as they are decoded.
+    """
+    flag = bits[pos]; pos += 1
+
+    if flag:
+        # Repeat: read adaptive-width index.
+        width = index_width(len(name_list))
+        idx, pos = _read_int(bits, pos, width)
+        return name_list[idx], pos
+
+    # New name: read 5-bit length then Huffman chars (length=0 → raw string).
+    length, pos = _read_int(bits, pos, NAME_LENGTH_BITS)
+    if length == 0:
+        value, pos = _read_raw_string(bits, pos)
+    else:
+        chars = []
+        for _ in range(length):
+            char, pos = huffman_decode(bits, pos, bits_to_char)
+            chars.append(char)
+        value = "".join(chars)
+
+    name_list.append(value)
+    return value, pos
+
+
 # UTCDate and UTCTime are handled separately in decode_headers (they carry inter-game state).
 VALUE_DECODERS = {
     "Result":          decode_result,
@@ -215,11 +244,15 @@ def decode_value(tag: str, bits: bitLib.bitarray, pos: int) -> tuple[str, int]:
 def decode_headers(
     bits: bitLib.bitarray,
     pos: int,
+    name_list: list[str],
     prev_days: int | None = None,
     prev_secs: int | None = None,
 ) -> tuple[str, int, int | None, int | None]:
     """
     Decode a PGN header block from bits.
+
+    name_list: shared mutable list of player names seen so far (index → name).
+    Pass an empty list [] for the first game; it is mutated in place.
 
     prev_days / prev_secs: day-count / second-of-day from the previous game,
     used to read compact delta codes for UTCDate / UTCTime.  Pass None for
@@ -244,6 +277,8 @@ def decode_headers(
             value, pos, cur_days = decode_utc_date(bits, pos, prev_days)
         elif tag == "UTCTime":
             value, pos, cur_secs = decode_utc_time(bits, pos, prev_secs)
+        elif tag in ("White", "Black"):
+            value, pos = decode_player_name(bits, pos, name_list)
         else:
             value, pos = decode_value(tag, bits, pos)
         lines.append(f'[{tag} "{value}"]')

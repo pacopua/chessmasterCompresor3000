@@ -2,6 +2,7 @@ import re
 from datetime import date as _date, timedelta as _timedelta
 import bitarray as bitLib
 from .openings import opening_to_bits
+from .player_names import char_to_bits, NAME_CHAR_SET, NAME_LENGTH_BITS, index_width
 from .constant_types import (
     headers_bit_encoding,
     result_to_bits, termination_to_bits, title_to_bits, eco_letter_to_bits,
@@ -190,6 +191,35 @@ def encode_time_control(value: str) -> bitLib.bitarray:
         pass
     return _int_bits(TIME_CONTROL_UNKNOWN_BASE, TIME_CONTROL_BASE_BITS) + _raw_string(value)
 
+def encode_player_name(value: str, name_dict: dict[str, int]) -> bitLib.bitarray:
+    """LZ78-style dict + character-Huffman encoder for White/Black player names.
+
+    Repeat occurrence  →  "1" + adaptive-width index into name_dict
+    First occurrence   →  "0" + 5-bit length + Huffman-coded chars
+                          (length=0 is the raw-string escape for exotic chars)
+    name_dict is mutated in place: new names are appended at len(name_dict).
+    """
+    if value in name_dict:
+        idx   = name_dict[value]
+        width = index_width(len(name_dict))
+        return bitLib.bitarray("1") + _int_bits(idx, width)
+
+    # New name — register it before encoding so the decoder mirrors the order.
+    name_dict[value] = len(name_dict)
+    bits = bitLib.bitarray("0")
+
+    if len(value) > 0 and all(c in NAME_CHAR_SET for c in value):
+        bits.extend(_int_bits(len(value), NAME_LENGTH_BITS))
+        for c in value:
+            bits.extend(char_to_bits[c])
+    else:
+        # Length=0 escape: raw UTF-8 string follows.
+        bits.extend(_int_bits(0, NAME_LENGTH_BITS))
+        bits.extend(_raw_string(value))
+
+    return bits
+
+
 # just a bit of itty bitty of functional programming!
 # UTCDate and UTCTime are handled separately in encode_headers (they carry inter-game state).
 VALUE_ENCODERS = {
@@ -219,11 +249,15 @@ def encode_value(tag: str, value: str) -> bitLib.bitarray:
 
 def encode_headers(
     text: str,
+    name_dict: dict[str, int],
     prev_days: int | None = None,
     prev_secs: int | None = None,
 ) -> tuple[bitLib.bitarray, int | None, int | None]:
     """
     Encode a PGN header block to bits.
+
+    name_dict: shared mutable dict {player_name: index} that grows across games.
+    Pass an empty dict {} for the first game in a file; it is mutated in place.
 
     prev_days / prev_secs: day-count / second-of-day from the previous game,
     used to write compact delta codes for UTCDate / UTCTime.  Pass None for
@@ -251,6 +285,8 @@ def encode_headers(
             elif tag == "UTCTime":
                 tag_bits, cur_secs = encode_utc_time(value, prev_secs)
                 bits.extend(tag_bits)
+            elif tag in ("White", "Black"):
+                bits.extend(encode_player_name(value, name_dict))
             else:
                 bits.extend(encode_value(tag, value))
         else:
