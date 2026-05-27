@@ -177,9 +177,11 @@ def encode_pgn_file_chess(input_path: str, output_path: str) -> None:
     print(f"  {len(games)} games")
 
     header_bits = bitLib.bitarray()
+    prev_days: int | None = None
+    prev_secs: int | None = None
     for hdr, _ in games:
-        # bit encoding for the headers
-        header_bits.extend(encode_headers(hdr))
+        game_bits, prev_days, prev_secs = encode_headers(hdr, prev_days, prev_secs)
+        header_bits.extend(game_bits)
 
     move_blocks: list[bytes] = []
     for i, (_, mv) in enumerate(games):
@@ -313,8 +315,10 @@ def decode_pgn_file_chess(input_path: str, output_path: str) -> None:
 
     game_headers: list[str] = []
     hpos = 0
+    prev_days: int | None = None
+    prev_secs: int | None = None
     while hpos < n_bits:
-        hdr, hpos = decode_headers(hdr_ba, hpos)
+        hdr, hpos, prev_days, prev_secs = decode_headers(hdr_ba, hpos, prev_days, prev_secs)
         game_headers.append(hdr)
 
     n_games = struct.unpack_from('>I', raw, pos)[0]; pos += 4

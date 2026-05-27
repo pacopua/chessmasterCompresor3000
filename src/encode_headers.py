@@ -1,4 +1,5 @@
 import re
+from datetime import date as _date, timedelta as _timedelta
 import bitarray as bitLib
 from .openings import opening_to_bits
 from .constant_types import (
@@ -16,6 +17,13 @@ from .constant_types import (
 )
 
 _HEADER_RE = re.compile(r'\[(\w+)\s+"([^"]*)"\]')
+
+_EPOCH = _date(UTC_DATE_BASE_YEAR, 1, 1)
+_UTC_DATE_DELTA_OFFSET = 63   # 7-bit delta [-63,+63] stored as [0,126]; 127 unused (flag scheme has no sentinel)
+_UTC_TIME_DELTA_OFFSET = 63   # same 7-bit scheme for time
+
+def _date_to_days(year: int, month: int, day: int) -> int:
+    return (_date(year, month, day) - _EPOCH).days
 
 # This function is here for the sections that cannot be encoded. Or also for the values we don't take into account. Each tag from the header has a set of values accounted for, but if the value is not in that set, we encode it as UNKNOWN_TEXT and then the raw UTF-8 string, in that case the decoder will jus read the string as normal and that is that!
 def _raw_string(value: str) -> bitLib.bitarray:
@@ -83,30 +91,70 @@ def encode_rating_diff(value: str) -> bitLib.bitarray:
     return bitLib.bitarray("0") + _int_bits(RATING_DIFF_UNKNOWN_MAG, RATING_DIFF_MAG_BITS) + _raw_string(value)
 
 
-def encode_utc_date(value: str) -> bitLib.bitarray:
+def _abs_date_bits(year_offset: int, m: int, d: int) -> bitLib.bitarray:
+    return (
+        _int_bits(year_offset, UTC_DATE_YEAR_BITS)
+        + _int_bits(m, UTC_DATE_MONTH_BITS)
+        + _int_bits(d, UTC_DATE_DAY_BITS)
+    )
+
+
+def encode_utc_date(value: str, prev_days: int | None = None) -> tuple[bitLib.bitarray, int | None]:
+    """Returns (bits, current_day_count_or_None).
+
+    When prev_days is supplied, uses a 3-tier delta prefix:
+      "0"         — same day (1 bit)
+      "10" + 7b   — delta in [-63,+63] (9 bits)
+      "11" + 16b  — absolute fallback (18 bits)
+    First game (prev_days=None) uses the legacy 16-bit absolute encoding.
+    """
     try:
         y, m, d = (int(p) for p in value.split("."))
         year_offset = y - UTC_DATE_BASE_YEAR
         if 0 <= year_offset < UTC_DATE_UNKNOWN_YEAR and 1 <= m <= 12 and 1 <= d <= 31:
-            return (
-                _int_bits(year_offset, UTC_DATE_YEAR_BITS)
-                + _int_bits(m, UTC_DATE_MONTH_BITS)
-                + _int_bits(d, UTC_DATE_DAY_BITS)
-            )
+            cur_days = _date_to_days(y, m, d)
+            if prev_days is not None:
+                delta = cur_days - prev_days
+                if delta == 0:
+                    return bitLib.bitarray("0"), cur_days
+                if -_UTC_DATE_DELTA_OFFSET <= delta <= _UTC_DATE_DELTA_OFFSET:
+                    return bitLib.bitarray("10") + _int_bits(delta + _UTC_DATE_DELTA_OFFSET, 7), cur_days
+                return bitLib.bitarray("11") + _abs_date_bits(year_offset, m, d), cur_days
+            return _abs_date_bits(year_offset, m, d), cur_days
     except (ValueError, AttributeError):
         pass
-    return _int_bits(UTC_DATE_UNKNOWN_YEAR, UTC_DATE_YEAR_BITS) + _raw_string(value)
+    # Unknown date
+    unknown_bits = _int_bits(UTC_DATE_UNKNOWN_YEAR, UTC_DATE_YEAR_BITS) + _raw_string(value)
+    if prev_days is not None:
+        return bitLib.bitarray("11") + unknown_bits, None
+    return unknown_bits, None
 
 
-def encode_utc_time(value: str) -> bitLib.bitarray:
+def encode_utc_time(value: str, prev_secs: int | None = None) -> tuple[bitLib.bitarray, int | None]:
+    """Returns (bits, current_seconds_or_None).
+
+    When prev_secs is supplied, uses a 2-tier delta prefix:
+      "0" + 7b   — delta in [-63,+63] (8 bits)
+      "1" + 17b  — absolute fallback (18 bits)
+    First game (prev_secs=None) uses the legacy 17-bit absolute encoding.
+    """
     try:
         h, m, s = (int(p) for p in value.split(":"))
         total = h * 3600 + m * 60 + s
         if total < UTC_TIME_UNKNOWN:
-            return _int_bits(total, UTC_TIME_BITS)
+            if prev_secs is not None:
+                delta = total - prev_secs
+                if -_UTC_TIME_DELTA_OFFSET <= delta <= _UTC_TIME_DELTA_OFFSET:
+                    return bitLib.bitarray("0") + _int_bits(delta + _UTC_TIME_DELTA_OFFSET, 7), total
+                return bitLib.bitarray("1") + _int_bits(total, UTC_TIME_BITS), total
+            return _int_bits(total, UTC_TIME_BITS), total
     except (ValueError, AttributeError):
         pass
-    return _int_bits(UTC_TIME_UNKNOWN, UTC_TIME_BITS) + _raw_string(value)
+    # Unknown time
+    unknown_bits = _int_bits(UTC_TIME_UNKNOWN, UTC_TIME_BITS) + _raw_string(value)
+    if prev_secs is not None:
+        return bitLib.bitarray("1") + unknown_bits, None
+    return unknown_bits, None
 
 
 def encode_opening(value: str) -> bitLib.bitarray:
@@ -143,6 +191,7 @@ def encode_time_control(value: str) -> bitLib.bitarray:
     return _int_bits(TIME_CONTROL_UNKNOWN_BASE, TIME_CONTROL_BASE_BITS) + _raw_string(value)
 
 # just a bit of itty bitty of functional programming!
+# UTCDate and UTCTime are handled separately in encode_headers (they carry inter-game state).
 VALUE_ENCODERS = {
     "Result":          encode_result,
     "Termination":     encode_termination,
@@ -153,8 +202,6 @@ VALUE_ENCODERS = {
     "BlackElo":        encode_elo,
     "WhiteRatingDiff": encode_rating_diff,
     "BlackRatingDiff": encode_rating_diff,
-    "UTCDate":         encode_utc_date,
-    "UTCTime":         encode_utc_time,
     "TimeControl":     encode_time_control,
     "Site":            encode_site,
     "Event":           encode_event,
@@ -170,14 +217,25 @@ def encode_value(tag: str, value: str) -> bitLib.bitarray:
     return _raw_string(value)
 
 
-def encode_headers(text: str) -> bitLib.bitarray:
+def encode_headers(
+    text: str,
+    prev_days: int | None = None,
+    prev_secs: int | None = None,
+) -> tuple[bitLib.bitarray, int | None, int | None]:
     """
     Encode a PGN header block to bits.
 
-    Parses lines of the form  [TagName "TagValue"]  until an empty line or
-    end of text, then appends SEACABO as the end-of-headers marker.
+    prev_days / prev_secs: day-count / second-of-day from the previous game,
+    used to write compact delta codes for UTCDate / UTCTime.  Pass None for
+    the first game in a file (falls back to legacy absolute encoding).
+
+    Returns (bits, cur_days, cur_secs) — the current game's date/time values
+    to be forwarded as prev_* when encoding the next game.
     """
     bits = bitLib.bitarray()
+    cur_days: int | None = prev_days
+    cur_secs: int | None = prev_secs
+
     for line in text.splitlines():
         if not line.strip():
             break
@@ -187,13 +245,20 @@ def encode_headers(text: str) -> bitLib.bitarray:
         tag, value = m.group(1), m.group(2)
         if tag in headers_bit_encoding and tag not in ("SEACABO", "UNKNOWN_TAG"):
             bits.extend(headers_bit_encoding[tag])
-            bits.extend(encode_value(tag, value))
+            if tag == "UTCDate":
+                tag_bits, cur_days = encode_utc_date(value, prev_days)
+                bits.extend(tag_bits)
+            elif tag == "UTCTime":
+                tag_bits, cur_secs = encode_utc_time(value, prev_secs)
+                bits.extend(tag_bits)
+            else:
+                bits.extend(encode_value(tag, value))
         else:
             bits.extend(headers_bit_encoding["UNKNOWN_TAG"])
             bits.extend(_raw_string(tag))
             bits.extend(_raw_string(value))
     bits.extend(headers_bit_encoding["SEACABO"])
-    return bits
+    return bits, cur_days, cur_secs
 
 def strip_non_headers(text: str) -> str:
     """
