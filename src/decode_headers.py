@@ -1,9 +1,10 @@
 import bitarray as bitLib
-from .openings import bits_to_opening, OPENING_BITS, OPENING_UNKNOWN
+from .huffman import huffman_decode
+from .openings import bits_to_opening
 from .constant_types import (
     headers_bit_decoding,
     bits_to_result, bits_to_termination, bits_to_title, bits_to_eco_letter,
-    bits_to_event, EVENT_BITS, EVENT_UNKNOWN,
+    bits_to_event,
     ELO_BITS, ELO_UNKNOWN,
     RATING_DIFF_MAG_BITS, RATING_DIFF_UNKNOWN_MAG,
     UTC_DATE_BASE_YEAR, UTC_DATE_YEAR_BITS, UTC_DATE_MONTH_BITS, UTC_DATE_DAY_BITS,
@@ -99,17 +100,17 @@ def decode_utc_time(bits: bitLib.bitarray, pos: int) -> tuple[str, int]:
 
 
 def decode_opening(bits: bitLib.bitarray, pos: int) -> tuple[str, int]:
-    value, pos = _read_int(bits, pos, OPENING_BITS)
-    if value == OPENING_UNKNOWN:
+    value, pos = huffman_decode(bits, pos, bits_to_opening)
+    if value == "UNKNOWN_TEXT":
         return _read_raw_string(bits, pos)
-    return bits_to_opening[format(value, f"0{OPENING_BITS}b")], pos
+    return value, pos
 
 
 def decode_event(bits: bitLib.bitarray, pos: int) -> tuple[str, int]:
-    value, pos = _read_int(bits, pos, EVENT_BITS)
-    if value == EVENT_UNKNOWN:
+    value, pos = huffman_decode(bits, pos, bits_to_event)
+    if value == "UNKNOWN_TEXT":
         return _read_raw_string(bits, pos)
-    return bits_to_event[format(value, f"0{EVENT_BITS}b")], pos
+    return value, pos
 
 
 def decode_site(bits: bitLib.bitarray, pos: int) -> tuple[str, int]:

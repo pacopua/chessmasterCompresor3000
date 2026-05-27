@@ -1,10 +1,10 @@
 import re
 import bitarray as bitLib
-from .openings import opening_to_bits, OPENING_BITS, OPENING_UNKNOWN
+from .openings import opening_to_bits
 from .constant_types import (
     headers_bit_encoding,
     result_to_bits, termination_to_bits, title_to_bits, eco_letter_to_bits,
-    event_to_bits, EVENT_BITS, EVENT_UNKNOWN,
+    event_to_bits,
     ELO_BITS, ELO_UNKNOWN, ELO_MAX_VALID,
     RATING_DIFF_MAG_BITS, RATING_DIFF_UNKNOWN_MAG, RATING_DIFF_MAX_MAG,
     UTC_DATE_BASE_YEAR, UTC_DATE_YEAR_BITS, UTC_DATE_MONTH_BITS, UTC_DATE_DAY_BITS,
