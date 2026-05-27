@@ -156,7 +156,7 @@ def _encode_game(moves_text: str) -> bytes:
     for move, annot in plies:
         tsubA = time.perf_counter()
         # given the current state of the board, what moves are legal?
-        legal = (board2.pseudo_legal_moves)
+        legal = (board2.legal_moves)
         tsubB = time.perf_counter()
         tsum0 += (tsubA-tsubB)
 
@@ -305,7 +305,7 @@ def _decode_game(block: bytes) -> str:
 
     for _ in range(ply_count):
         
-        legal = (board.pseudo_legal_moves)
+        legal = (board.legal_moves)
         n     = legal.count()
         
         width = math.ceil(math.log2(n)) if n > 1 else 0
