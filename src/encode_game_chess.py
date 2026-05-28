@@ -187,8 +187,12 @@ def encode_pgn_file_chess(input_path: str, output_path: str) -> None:
 
     # Sequentially encode headers
     header_bits = bitLib.bitarray()
+    name_dict:  dict[str, int] = {}
+    prev_days:  int | None = None
+    prev_secs:  int | None = None
     for hdr, _ in games:
-        header_bits.extend(encode_headers(hdr))
+        game_bits, prev_days, prev_secs = encode_headers(hdr, name_dict, prev_days, prev_secs)
+        header_bits.extend(game_bits)
 
     # Parallelize Move Encoding
     # Map the text blocks to our worker across all available CPU cores.
@@ -340,8 +344,11 @@ def decode_pgn_file_chess(input_path: str, output_path: str) -> None:
     # 1. Decode Headers Sequentially
     game_headers: list[str] = []
     hpos = 0
+    name_list:  list[str] = []
+    prev_days:  int | None = None
+    prev_secs:  int | None = None
     while hpos < n_bits:
-        hdr, hpos = decode_headers(hdr_ba, hpos)
+        hdr, hpos, prev_days, prev_secs = decode_headers(hdr_ba, hpos, name_list, prev_days, prev_secs)
         game_headers.append(hdr)
 
     n_games = struct.unpack_from('>I', raw, pos)[0]; pos += 4

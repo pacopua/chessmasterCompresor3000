@@ -4,8 +4,9 @@ import bitarray as bitLib
 # Encoding: 11 bits per value (covers indices 0–2046).
 # Index 2047 (all 1s) = UNKNOWN_TEXT sentinel — raw UTF-8 follows.
 
-OPENING_BITS    = 11
-OPENING_UNKNOWN = (1 << OPENING_BITS) - 1   # 2047
+# Huffman sentinel: included as a low-frequency leaf so the decoder knows a raw
+# UTF-8 string follows when it encounters this codeword.
+OPENING_UNKNOWN = "UNKNOWN_TEXT"
 
 _OPENING_STRINGS = [
     "Van't Kruijs Opening",
@@ -1618,12 +1619,13 @@ _OPENING_STRINGS = [
     'French Defense: Advance Variation, Nimzowitsch Gambit',
 ]
 
-opening_to_bits: dict[str, bitLib.bitarray] = {
-    s: bitLib.bitarray(format(i, f'0{OPENING_BITS}b'))
-    for i, s in enumerate(_OPENING_STRINGS)
-}
-opening_to_bits["UNKNOWN_TEXT"] = bitLib.bitarray(
-    format(OPENING_UNKNOWN, f"0{OPENING_BITS}b")
-)
+from .huffman import build_huffman_codes
+from .frequencies import OPENING_FREQS
 
-bits_to_opening: dict[str, str] = {v.to01(): k for k, v in opening_to_bits.items()}
+# Use corpus frequencies so common openings get shorter Huffman codes.
+# Strings absent from the corpus (count 0) fall back to 1 so they still
+# appear in the tree rather than being silently dropped.
+_freqs = [(s, OPENING_FREQS.get(s, 1)) for s in _OPENING_STRINGS]
+_freqs.append(("UNKNOWN_TEXT", OPENING_FREQS.get("UNKNOWN_TEXT", 1)))
+
+opening_to_bits, bits_to_opening = build_huffman_codes(_freqs)

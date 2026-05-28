@@ -165,13 +165,14 @@ _EVENT_STRINGS = [
     "Rated Blitz tournament https://lichess.org/tournament/FrHTzWue",
     "Rated Classical tournament https://lichess.org/tournament/rIxo1iu2",
 ]
-EVENT_BITS = 6
-EVENT_UNKNOWN = (1 << EVENT_BITS) - 1   # 63 → raw UTF-8 follows
-event_to_bits: dict[str, bitLib.bitarray] = {
-    s: bitLib.bitarray(format(i, f"0{EVENT_BITS}b")) for i, s in enumerate(_EVENT_STRINGS)
-}
-event_to_bits["UNKNOWN_TEXT"] = bitLib.bitarray(format(EVENT_UNKNOWN, f"0{EVENT_BITS}b"))
-bits_to_event: dict[str, str] = {v.to01(): k for k, v in event_to_bits.items()}
+from .huffman import build_huffman_codes
+from .frequencies import EVENT_FREQS
+
+# Use corpus frequencies so common events get shorter Huffman codes.
+_event_freqs = [(s, EVENT_FREQS.get(s, 1)) for s in _EVENT_STRINGS]
+_event_freqs.append(("UNKNOWN_TEXT", EVENT_FREQS.get("UNKNOWN_TEXT", 1)))
+
+event_to_bits, bits_to_event = build_huffman_codes(_event_freqs)
 
 # Site: strip constant prefix, encode the 8-char base62 game ID
 # Characters [0-9A-Za-z] map to indices 0–61 (6 bits each, covers 0–63)
