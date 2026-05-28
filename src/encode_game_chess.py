@@ -18,6 +18,9 @@ File layout:
 import os, re, struct, math
 import chess
 import bitarray as bitLib
+import numpy as np
+import concurrent.futures
+import multiprocessing
 
 from .encode_headers import encode_headers
 from .decode_headers import decode_headers
@@ -167,37 +170,53 @@ def _encode_game(moves_text: str) -> bytes:
         annot_blob
     )
 
+def _safe_encode_game_worker(args: tuple[int, str]) -> tuple[int, bytes, str]:
+    """Top-level worker function required for multiprocessing serialization."""
+    idx, moves_text = args
+    try:
+        return idx, _encode_game(moves_text), None
+    except Exception as e:
+        return idx, struct.pack('>HB', 0, 3), str(e)
 
 def encode_pgn_file_chess(input_path: str, output_path: str) -> None:
     with open(input_path, 'r', encoding='utf-8') as f:
         text = f.read()
 
-    # separate the games into a list of text! 
     games = _split_pgn_games(text)
     print(f"  {len(games)} games")
 
+    # Sequentially encode headers
     header_bits = bitLib.bitarray()
     for hdr, _ in games:
-        # bit encoding for the headers
         header_bits.extend(encode_headers(hdr))
 
-    move_blocks: list[bytes] = []
-    for i, (_, mv) in enumerate(games):
-        try:
-            # encode game using chess-python
-            move_blocks.append(_encode_game(mv))
-        except Exception as e:
-            print(f"  WARNING game {i+1}: {e}")
-            move_blocks.append(struct.pack('>HB', 0, 3))
+    # Parallelize Move Encoding
+    # Map the text blocks to our worker across all available CPU cores.
+    game_args = [(i, mv) for i, (_, mv) in enumerate(games)]
+    move_blocks = [b''] * len(games)
+    
+    cores = max(1, multiprocessing.cpu_count() - 1) # Leave 1 core for OS stability
+    with concurrent.futures.ProcessPoolExecutor(max_workers=cores) as executor:
+        results = executor.map(_safe_encode_game_worker, game_args, chunksize=100)
+        
+        for idx, block, error in results:
+            if error:
+                print(f"  WARNING game {idx+1}: {error}")
+            move_blocks[idx] = block
+
+    # Pre-allocate bytearray for faster batched writing
+    out_buffer = bytearray()
+    out_buffer.extend(MAGIC)
+    out_buffer.extend(struct.pack('>I', len(header_bits)))
+    out_buffer.extend(header_bits.tobytes())
+    out_buffer.extend(struct.pack('>I', len(games)))
+    
+    for block in move_blocks:
+        out_buffer.extend(struct.pack('>I', len(block)))
+        out_buffer.extend(block)
 
     with open(output_path, 'wb') as f:
-        f.write(MAGIC)
-        f.write(struct.pack('>I', len(header_bits)))
-        f.write(header_bits.tobytes())
-        f.write(struct.pack('>I', len(games)))
-        for block in move_blocks:
-            f.write(struct.pack('>I', len(block)))
-            f.write(block)
+        f.write(out_buffer)
 
     orig  = os.path.getsize(input_path)
     compr = os.path.getsize(output_path)
@@ -296,6 +315,13 @@ def _decode_game(block: bytes) -> str:
     parts.append(_RESULT_DEC[result_code])
     return ' '.join(parts)
 
+def _safe_decode_game_worker(args: tuple[int, bytes]) -> tuple[int, str, str]:
+    """Top-level worker for safe multiprocessing of game decoding."""
+    idx, block = args
+    try:
+        return idx, _decode_game(block), None
+    except Exception as e:
+        return idx, "", str(e)
 
 def decode_pgn_file_chess(input_path: str, output_path: str) -> None:
     with open(input_path, 'rb') as f:
@@ -311,6 +337,7 @@ def decode_pgn_file_chess(input_path: str, output_path: str) -> None:
     hdr_ba.frombytes(raw[pos:pos+n_hdr_bytes]); pos += n_hdr_bytes
     del hdr_ba[n_bits:]
 
+    # 1. Decode Headers Sequentially
     game_headers: list[str] = []
     hpos = 0
     while hpos < n_bits:
@@ -319,12 +346,29 @@ def decode_pgn_file_chess(input_path: str, output_path: str) -> None:
 
     n_games = struct.unpack_from('>I', raw, pos)[0]; pos += 4
 
-    game_moves: list[str] = []
+    # 2. Fast Sequential Block Extraction
+    # Slice out the raw byte blocks quickly before parallelizing
+    game_blocks: list[bytes] = []
     for _ in range(n_games):
         block_len = struct.unpack_from('>I', raw, pos)[0]; pos += 4
-        game_moves.append(_decode_game(raw[pos:pos+block_len]))
+        game_blocks.append(raw[pos:pos+block_len])
         pos += block_len
 
+    # 3. Parallel Decoding of Chess Logic
+    game_moves: list[str] = [""] * n_games
+    decode_args = [(i, block) for i, block in enumerate(game_blocks)]
+
+    cores = max(1, multiprocessing.cpu_count() - 1)
+    with concurrent.futures.ProcessPoolExecutor(max_workers=cores) as executor:
+        # Use chunking to reduce IPC overhead
+        results = executor.map(_safe_decode_game_worker, decode_args, chunksize=100)
+
+        for idx, moves_text, error in results:
+            if error:
+                print(f"  WARNING decoding game {idx+1}: {error}")
+            game_moves[idx] = moves_text
+
+    # 4. Batched Reassembly and Writing
     out = [f"{h}\n\n{m}" for h, m in zip(game_headers, game_moves)]
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write('\n\n'.join(out))
