@@ -3,6 +3,10 @@
 *.code-review-graph/
 *specs/
 
+# PyInstaller build artifacts
+build/
+*.spec
+
 # Latex bullshit
 *.aux
 *.bbl
