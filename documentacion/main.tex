@@ -1,6 +1,6 @@
 \documentclass[11pt, letterpaper]{article}
 \usepackage[table]{xcolor}
-\usepackage{graphicx} % Required for inserting images
+\usepackage{graphicx}
 \usepackage{titlesec}
 \usepackage{float}
 \usepackage{amsmath}
@@ -17,7 +17,8 @@
 \usepackage{tcolorbox}
 \usepackage{hyperref}
 \usepackage[spanish]{babel}
-\usepackage{amssymb} % Añadido para simbolos extra
+\usepackage{amssymb}
+\tcbuselibrary{breakable}
 
 \usepackage[left=2.5cm, right=2.5cm, top=2.5cm, bottom=2.5cm]{geometry}
 
@@ -27,47 +28,538 @@
     \centering
     {\Huge \textsc{\textbf{}}\par}
     \par\vspace{1cm}
-    % Asegúrate de tener el archivo de imagen o comenta la línea si no lo tienes
     \begin{center}
-        \includegraphics[width=0.45\textwidth]{imagenes/Logo_UPC.svg.png}
+        % \includegraphics[width=0.45\textwidth]{imagenes/Logo_UPC.svg.png}
     \end{center}
     
     \vspace{1cm}
-    {\huge \textsc{Compresor de partidas de ajedrez}\par}
+    {\huge \textsc{Compresor de partidas de ajedrez (CPG5)}\par}
     \vspace{2cm}
     {\Large \textsc{\textbf{Práctica final de CDI}}\par}
     
     \vspace{1cm}
+ 
     {\normalsize \textbf{Autores:} \\ {Alex Lafuente Gonzalez} \\ {Daniel Mejias Cerezo} \\ {Adrià Cebrián Ruiz} \\ \par}
     \vspace{0.5cm}
 
-    {Facultat Informàtica de Barcelona (FIB)}\\
-    31 de mayo de 2026
-
-    \vfill
+    {Facultat Informàtica de Barcelona, UPC}
+    \vspace{2cm}
+    
+    {\large \today \par}
 \end{titlepage}
 
+\newpage
 \tableofcontents
 \newpage
 
 \section{Introducción}
-\newpage
-\section{Implementación}
-\newpage
-\subsection{Headers}
-\newpage
-\subsection{Partidas}
-\newpage
-\subsection{Paralelización}
-\newpage
-\subsection{Resultados}
-\newpage
-\subsection{Implementación inicial}
-\section{Conclusiones}
-\newpage
+El formato Portable Game Notation (PGN) es el estándar universalmente aceptado para el almacenamiento e intercambio de partidas de ajedrez. Sin embargo, al tratarse de un formato basado puramente en texto plano, presenta un grado de redundancia sumamente elevado. Las cabeceras repiten constantemente etiquetas estáticas (como \textit{Event}, \textit{Site}, \textit{White}, \textit{Black}), y los movimientos se registran utilizando notación algebraica, ignorando por completo la lógica intrínseca del juego. 
 
+Para resolver este problema, hemos diseñado e implementado el formato \textbf{CPG5}, un compresor avanzado de partidas de ajedrez. A diferencia de compresores de propósito general (como ZIP o GZIP) que tratan el PGN como un flujo de bytes opacos, CPG5 es un \textit{compresor consciente del dominio}. Extrae la semántica del ajedrez para codificar cada aspecto de la partida de forma óptima: utilizando diccionarios dinámicos, códigos Huffman basados en frecuencias reales extraídas de un gran corpus, codificación diferencial temporal y, lo más importante, emulación del estado del tablero para almacenar únicamente el índice del movimiento legal escogido en cada turno.
+
+\section{Metodología de Compresión}
+
+El motor de compresión divide su operación en dos grandes dominios: la metadata de las partidas (cabeceras) y la lógica de los movimientos.
+
+\subsection{Codificación de Cabeceras (Headers)}
+
+Las cabeceras se comprimen mediante un esquema híbrido implementado en \texttt{encode\_headers.py} y \texttt{constant\_types.py}, que combina codificación por bits fijos, modelos estadísticos y técnicas de diccionario.
+
+\subsubsection{Codificación estructurada por tipo de campo}
+
+\paragraph{Campos numéricos}
+Los valores numéricos se representan mediante empaquetado de bits de longitud fija, minimizando la redundancia inherente al formato textual PGN. Entre ellos destacan:
+
+\begin{itemize}
+    \item \textbf{Elo de jugadores (\texttt{WhiteElo}, \texttt{BlackElo}):} codificados en 12 bits.
+    \item \textbf{Diferencia de rating (\texttt{WhiteRatingDiff}, \texttt{BlackRatingDiff}):} representada mediante 1 bit de signo más 9 bits de magnitud.
+\end{itemize}
+
+Cuando un valor no pertenece al rango representable o no es válido, se utiliza un código de escape (\texttt{UNKNOWN\_TEXT}) seguido de la cadena original en UTF-8, preservando la pérdida cero de información.
+
+\paragraph{Campos categóricos}
+Los campos con dominio finito utilizan tablas de codificación estáticas basadas en el corpus:
+
+\begin{itemize}
+    \item \texttt{Result}
+    \item \texttt{Termination}
+    \item \texttt{WhiteTitle}, \texttt{BlackTitle}
+    \item \texttt{Event}
+    \item \texttt{Opening}
+    \item \texttt{ECO}
+\end{itemize}
+
+En particular, el código ECO se descompone en dos componentes:
+
+\begin{itemize}
+    \item Letra (\texttt{A--E}), codificada mediante tabla fija.
+    \item Número (\texttt{00--99}), almacenado en 7 bits.
+\end{itemize}
+
+Este diseño reduce significativamente el coste respecto a la representación ASCII convencional.
+
+\paragraph{Campos temporales (Delta Encoding)}
+Los campos \texttt{UTCDate} y \texttt{UTCTime} se comprimen mediante codificación diferencial respecto a la partida anterior, explotando la localidad temporal de los datasets de torneos.
+
+\begin{itemize}
+    \item Las fechas se almacenan como deltas en el rango $[-63, +63]$ con offset de 63.
+    \item Las horas se codifican en segundos absolutos con posibilidad de delta similar.
+\end{itemize}
+
+Este esquema permite representar secuencias de partidas consecutivas con alta redundancia temporal de forma altamente eficiente.
+
+\paragraph{Campos de control estructurado}
+El campo \texttt{TimeControl} se almacena separando explícitamente:
+
+\begin{itemize}
+    \item tiempo base,
+    \item incremento por jugada.
+\end{itemize}
+
+Ambos valores se codifican mediante enteros de longitud fija, eliminando completamente la representación textual original.
+
+\paragraph{Campos de red y contexto}
+El campo \texttt{Site} se optimiza eliminando prefijos redundantes (por ejemplo, \textit{https://lichess.org/}). El identificador restante se codifica mediante Base62, asignando un índice de 6 bits por carácter.
+
+\subsubsection{Mecanismos de escape y robustez}
+
+CPG5 incorpora un sistema de escape completamente reversible para garantizar pérdida cero de información en campos no contemplados por los esquemas de compresión.
+
+\begin{itemize}
+    \item \textbf{Valores desconocidos:} se codifican mediante \texttt{UNKNOWN\_TEXT}, seguidos de la cadena original en UTF-8.
+    \item \textbf{Etiquetas no estándar:} se codifican mediante \texttt{UNKNOWN\_TAG}, incluyendo tanto el nombre del campo como su valor.
+\end{itemize}
+
+Este mecanismo asegura compatibilidad hacia adelante con extensiones arbitrarias del estándar PGN.
+
+\subsubsection{Codificación de nombres de jugadores}
+
+El módulo \texttt{player\_names.py} implementa un esquema híbrido basado en diccionario incremental y codificación por entropía.
+
+\begin{enumerate}
+    \item \textbf{Primera aparición (flag 0):}
+    El nombre se codifica como:
+    \begin{itemize}
+        \item longitud en 5 bits,
+        \item secuencia de caracteres codificados mediante Huffman sobre un alfabeto de 64 símbolos.
+    \end{itemize}
+    Si el nombre contiene caracteres fuera del alfabeto permitido, se utiliza un mecanismo de escape basado en UTF-8.
+
+    \item \textbf{Apariciones posteriores (flag 1):}
+    Se sustituye el nombre por su índice en un diccionario global incremental (modelo tipo LZ78). El número de bits necesarios se ajusta dinámicamente según:
+    \[
+    \max\left(1, \left\lceil \log_2(N) \right\rceil\right)
+    \]
+    donde $N$ es el tamaño actual del diccionario.
+\end{enumerate}
+
+Este diseño explota la alta repetición de jugadores en archivos PGN de gran tamaño, reduciendo significativamente la entropía de este campo.
+
+\subsection{Codificación de Movimientos (Chess Logic)}
+
+El núcleo de CPG5 (\texttt{encode\_game\_chess.py}) explota una propiedad fundamental del ajedrez: en cualquier posición dada, únicamente existe un conjunto finito y relativamente pequeño de movimientos legales. En lugar de almacenar la notación algebraica completa de cada jugada, el compresor reconstruye internamente el estado exacto del tablero mediante la biblioteca \texttt{python-chess} y almacena únicamente cuál de los movimientos legales disponibles fue seleccionado por el jugador.
+
+Sea $N$ el número de movimientos legales en una posición determinada. Tras generar la lista completa de movimientos legales en un orden determinista, el movimiento ejecutado queda identificado unívocamente por su posición dentro de dicha lista. Por tanto, el coste teórico mínimo para almacenar una jugada es:
+
+\[
+\left\lceil \log_2(N) \right\rceil
+\]
+
+bits.
+
+Durante la descompresión, el decodificador reconstruye exactamente el mismo tablero, genera nuevamente la lista de movimientos legales y recupera la jugada leyendo únicamente dicho índice. Este mecanismo elimina completamente la necesidad de almacenar coordenadas, piezas, capturas, promociones, jaques o cualquier otro elemento de la notación SAN.
+
+\subsubsection{Empaquetado de Plies}
+
+Cada medio movimiento (\textit{ply}) se representa mediante dos componentes:
+
+\begin{enumerate}
+\item El índice del movimiento dentro de la lista de movimientos legales.
+\item Un bit adicional (\texttt{has\_annot}) que indica la presencia o ausencia de anotaciones asociadas.
+\end{enumerate}
+
+Para una posición con $N$ movimientos legales, el número de bits necesarios para representar el índice es:
+
+\[
+w =
+\begin{cases}
+0 & \text{si } N=1 \\
+\left\lceil \log_2(N) \right\rceil & \text{si } N>1
+\end{cases}
+\]
+
+Por consiguiente, el coste total por ply es:
+
+[
+w + 1
+]
+
+bits.
+
+El flujo de bits resultante se concatena de forma continua para toda la partida y se rellena con ceros únicamente al final del bloque para garantizar alineamiento a byte.
+
+\subsubsection{Codificación del Resultado}
+
+El resultado final de la partida se almacena separadamente mediante un código fijo de un byte:
+
+\begin{center}
+\begin{tabular}{cc}
+\hline
+Resultado PGN & Código \\
+\hline
+\texttt{1-0} & 0 \\
+\texttt{0-1} & 1 \\
+\texttt{1/2-1/2} & 2 \\
+\texttt{*} & 3 \\
+\hline
+\end{tabular}
+\end{center}
+
+De esta manera se evita almacenar repetidamente la cadena textual completa al final de cada PGN.
+
+\subsubsection{Tratamiento de Anotaciones}
+
+Las anotaciones PGN encerradas entre llaves (\texttt{{...}}) se procesan de forma independiente al flujo principal de movimientos.
+
+Durante la compresión, cada bloque de anotación se extrae temporalmente del texto PGN y se sustituye por un marcador interno. Posteriormente, cuando el compresor identifica a qué movimiento pertenece la anotación, activa el bit \texttt{has\_annot} correspondiente y almacena la información en una sección auxiliar separada.
+
+CPG5 distingue varios tipos de anotaciones frecuentes:
+
+\begin{itemize}
+\item Evaluaciones de motor (\texttt{[\%eval ...]}).
+\item Anuncios de mate (\texttt{[\%eval \#n]}).
+\item Tiempos de reloj (\texttt{[\%clk h:mm:ss]}).
+\item Texto arbitrario no estructurado.
+\end{itemize}
+
+\paragraph{Evaluaciones centipawn}
+
+Las evaluaciones numéricas producidas por motores de análisis se convierten a centipeones y se almacenan como enteros con signo de 16 bits:
+
+\[
+\text{eval} = \operatorname{round}(100 \cdot \text{valor})
+\]
+
+Por ejemplo:
+
+\[
++0.35 \mapsto 35
+\]
+
+\[
+-1.27 \mapsto -127
+\]
+
+Esto reduce considerablemente el espacio necesario respecto a la representación textual original.
+
+\paragraph{Anuncios de mate}
+
+Las evaluaciones de tipo mate:
+
+\[
+    [\%eval \#5]
+\]
+
+se almacenan mediante un entero con signo de 8 bits que representa directamente la distancia al mate.
+
+\paragraph{Tiempos de reloj}
+
+Las marcas temporales:
+
+\[
+[\%clk ; h:mm:ss]
+\]
+
+se empaquetan en un entero de 16 bits utilizando la distribución:
+
+\[
+4\ \text{bits} + 6\ \text{bits} + 6\ \text{bits}
+\]
+
+correspondiente a:
+
+\begin{itemize}
+\item horas (0--15),
+\item minutos (0--63),
+\item segundos (0--63).
+\end{itemize}
+
+La codificación ocupa únicamente dos bytes frente a las ocho o más posiciones de la representación textual original.
+
+\paragraph{Texto libre}
+
+Cuando una anotación contiene información no reconocida por el compresor, se emplea un mecanismo de escape (\texttt{TOK\_ANNOT\_RAW}) que almacena literalmente el contenido original, garantizando una reconstrucción sin pérdida.
+
+Cada secuencia de anotación termina con un byte nulo (\texttt{0x00}), permitiendo al decodificador delimitar inequívocamente el final de cada bloque.
+
+\subsubsection{Elementos Ignorados}
+
+Diversos elementos presentes en el PGN no afectan al estado real del tablero y, por tanto, no necesitan almacenarse explícitamente.
+
+Entre ellos se encuentran:
+
+\begin{itemize}
+\item números de jugada (\texttt{1.}, \texttt{2.}, \texttt{15...}),
+\item símbolos NAG (\texttt{\$1}, \texttt{\$2}, etc.),
+\item variantes entre paréntesis,
+\item sufijos SAN de valoración (\texttt{!}, \texttt{?}, \texttt{!!}, \texttt{?!}, etc.).
+\end{itemize}
+
+Toda esta información puede descartarse sin afectar a la reconstrucción exacta de la secuencia principal de movimientos.
+
+\subsubsection{Estructura Binaria de una Partida}
+
+Cada partida se almacena como un bloque independiente precedido por su longitud en bytes. Internamente, dicho bloque posee la siguiente organización:
+
+\begin{center}
+\begin{tabular}{ll}
+\hline
+Campo & Tamaño \\
+\hline
+Número de plies & 2 bytes \\
+Resultado & 1 byte \\
+Movimientos empaquetados & variable \\
+Anotaciones & variable \\
+\hline
+\end{tabular}
+\end{center}
+
+El número de plies se almacena mediante un entero sin signo de 16 bits, permitiendo representar hasta 65,535 medios movimientos por partida, muy por encima de cualquier partida práctica.
+
+\subsubsection{Formato Global CPG5}
+
+Finalmente, el archivo completo utiliza la siguiente estructura:
+
+\begin{center}
+\begin{tabular}{ll}
+\hline
+Campo & Tamaño \\
+\hline
+Magic Number (\texttt{CPG5}) & 4 bytes \\
+Longitud de cabeceras & 4 bytes \\
+Cabeceras comprimidas & variable \\
+Número de partidas & 4 bytes \\
+Bloques de partidas & variable \\
+\hline
+\end{tabular}
+\end{center}
+
+La separación explícita entre cabeceras y movimientos permite explotar mecanismos de compresión completamente distintos en ambos dominios. Mientras las cabeceras se benefician de diccionarios, Huffman y codificación diferencial, los movimientos se aproximan al límite de entropía impuesto por las propias reglas del ajedrez, almacenando únicamente la elección realizada entre los movimientos legales disponibles en cada posición.
+
+\subsection{Paralelización}
+
+Debido a que la compresión inteligente de movimientos requiere la simulación explícita del estado del tablero y la generación de movimientos legales en cada posición, el algoritmo presenta un coste computacional significativamente mayor que el de la compresión de cabeceras. Este proceso depende de forma intensiva de CPU, ya que cada \textit{ply} implica la reconstrucción del conjunto de movimientos legales mediante \texttt{python-chess}.
+
+Para mitigar este cuello de botella, CPG5 implementa una estrategia de paralelización multiproceso basada en \texttt{concurrent.futures.ProcessPoolExecutor}. Esta elección se debe a que el intérprete de Python limita el paralelismo efectivo mediante el GIL (\textit{Global Interpreter Lock}) en escenarios de cómputo intensivo, haciendo necesario el uso de procesos independientes.
+
+\subsubsection{Separación estricta de fases}
+
+El pipeline de compresión se divide en dos fases claramente diferenciadas:
+
+\begin{itemize}
+\item \textbf{Compresión de cabeceras:} ejecutada de forma estrictamente secuencial debido a dependencias de estado entre partidas consecutivas, tales como:
+\begin{itemize}
+\item codificación delta de fechas (\texttt{UTCDate}, \texttt{UTCTime}),
+\item diccionario global de nombres de jugadores (LZ78 incremental).
+\end{itemize}
+
+\item \textbf{Compresión de movimientos:} completamente independiente entre partidas, lo que permite su paralelización sin riesgos de inconsistencia.
+
+\end{itemize}
+
+Esta separación es clave: mientras las cabeceras presentan dependencia inter-partida, el bloque de movimientos es funcionalmente puro a nivel de partida individual.
+
+\subsubsection{Modelo de paralelización}
+
+Las partidas se distribuyen en forma de pares:
+
+[
+(i, \text{movimientos})
+]
+
+donde $i$ representa el índice original de la partida en el archivo.
+
+Cada worker procesa una partida completa mediante la función \texttt{\_encode\_game}, que reconstruye internamente el tablero desde el estado inicial estándar y calcula la secuencia de índices de movimientos legales.
+
+Para optimizar la utilización de CPU y minimizar sobrecarga de IPC, el sistema emplea \textit{chunking} de trabajos (\texttt{chunksize=100}), reduciendo el número de mensajes entre procesos.
+
+\subsubsection{Ejecución segura y tolerancia a fallos}
+
+Cada proceso worker está encapsulado en una función de seguridad:
+
+\begin{itemize}
+\item Si la compresión de una partida falla, el sistema no aborta el pipeline completo.
+\item En su lugar, se devuelve un bloque mínimo válido con código de resultado por defecto.
+\item El error se registra y la partida se marca como degradada.
+\end{itemize}
+
+Este diseño garantiza robustez en datasets de gran tamaño, donde la corrupción parcial de PGN es frecuente.
+
+\subsubsection{Reensamblaje determinista}
+
+Una vez finalizada la ejecución paralela, los resultados son reordenados utilizando el índice original de cada partida. Este paso es crítico, ya que la ejecución concurrente no garantiza orden de finalización.
+
+El sistema realiza un reensamblaje secuencial en un buffer preasignado:
+
+\begin{itemize}
+\item Se crea una estructura \texttt{move\_blocks} indexada por posición.
+\item Cada resultado del pool de procesos se inserta en su índice correspondiente.
+\item Posteriormente, se serializa en orden estricto para garantizar reproducibilidad bit-a-bit.
+\end{itemize}
+
+\subsubsection{Optimización de escritura}
+
+Antes de escribir el archivo final, todos los bloques se acumulan en un \texttt{bytearray} contiguo, minimizando operaciones de I/O. Esta estrategia reduce significativamente la fragmentación de escritura y mejora el rendimiento en discos de alta latencia.
+
+\subsubsection{Justificación del diseño híbrido}
+
+La arquitectura de CPG5 no busca paralelizar todo el pipeline, sino únicamente aquellas secciones donde existe independencia funcional real. En particular:
+
+\begin{itemize}
+\item Las cabeceras están sujetas a dependencias globales (estado del diccionario y del tiempo).
+\item Las partidas de ajedrez son independientes entre sí.
+\item Los movimientos dentro de una partida son secuenciales por naturaleza y no paralelizables sin romper la semántica del juego.
+\end{itemize}
+
+Este enfoque híbrido permite maximizar el rendimiento sin comprometer la exactitud del proceso de compresión ni la reproducibilidad del formato CPG5.
+
+
+\subsection{Estructura del Binario CPG5}
+
+El archivo resultante tiene un diseño binario estricto basado en codificación Big-Endian, con separación explícita entre metadatos globales, cabeceras comprimidas y bloques independientes de partidas.
+
+A nivel conceptual, CPG5 no se basa en un flujo continuo de texto comprimido, sino en una estructura híbrida de \textit{bitstream + byte-aligned blocks}, donde cada componente del archivo cumple una función específica dentro del pipeline de decodificación determinista.
+
+\begin{tcolorbox}[breakable, colback=gray!10, colframe=black]
+\begin{itemize}
+
+\item \textbf{[4 bytes]} Número mágico identificativo:
+\texttt{b'CPG5'}.
+Este identificador permite validar la integridad del archivo y evitar interpretaciones erróneas de datos no compatibles.
+
+\item \textbf{[4 bytes]} \texttt{uint32} (Big-Endian):
+Número total de bits utilizados en el bloque de cabeceras comprimidas.
+Este valor no representa bytes, sino la longitud exacta del bitstream lógico, lo que permite al decodificador truncar correctamente el padding final.
+
+\item \textbf{[N bytes]} Bloque de cabeceras comprimidas:
+Secuencia de bits generada por el módulo de codificación de metadata. Este bloque:
+\begin{itemize}
+    \item se empaqueta en bytes mediante alineación a 8 bits,
+    \item puede contener padding de ceros al final,
+    \item debe truncarse exactamente a la longitud especificada en el campo anterior.
+\end{itemize}
+
+\item \textbf{[4 bytes]} \texttt{uint32}:
+Número total de partidas $M$ contenidas en el archivo.
+
+\item \textbf{Por cada una de las $M$ partidas:}
+
+\begin{itemize}
+
+    \item \textbf{[4 bytes]} \texttt{uint32}:
+    Longitud en bytes del bloque completo de la partida ($L$).
+    Este valor permite al decodificador saltar eficientemente entre partidas sin necesidad de parsing incremental.
+
+    \item \textbf{[L bytes]} Bloque de movimientos:
+
+    \begin{itemize}
+
+        \item \textbf{[2 bytes]} \texttt{uint16}:
+        Número total de \textit{plies} en la partida.
+        Este valor incluye movimientos de ambos jugadores y se utiliza para dimensionar la reconstrucción del tablero.
+
+        \item \textbf{[1 byte]} \texttt{uint8}:
+        Resultado de la partida codificado como:
+        \begin{itemize}
+            \item 0 = 1-0
+            \item 1 = 0-1
+            \item 2 = 1/2-1/2
+            \item 3 = *
+        \end{itemize}
+
+        \item \textbf{[B bytes]} Bitstream de jugadas empaquetadas:
+        Cada \textit{ply} se codifica como:
+
+        \[
+        \lceil \log_2(N_{legal}) \rceil + 1
+        \]
+
+        bits, donde:
+        \begin{itemize}
+            \item los primeros bits representan el índice del movimiento dentro de la lista de movimientos legales ordenada determinísticamente,
+            \item el último bit indica la presencia de anotación asociada (\texttt{has\_annot}).
+        \end{itemize}
+
+        Este bloque se almacena en formato bit-packing y se rellena con ceros únicamente al final del bloque para completar el último byte.
+
+        \item \textbf{[A bytes]} Bloque de anotaciones:
+
+        Secuencia opcional de anotaciones asociadas a aquellos \textit{plies} cuyo bit \texttt{has\_annot} está activado.
+
+        Las anotaciones se almacenan en orden estricto de aparición y se decodifican de forma secuencial mediante tokens tipados:
+
+        \begin{itemize}
+            \item evaluaciones de motor (\texttt{TOK\_ANNOT\_EVAL}),
+            \item mates forzados (\texttt{TOK\_ANNOT\_MATE}),
+            \item tiempos de reloj (\texttt{TOK\_ANNOT\_CLK}),
+            \item anotaciones crudas (\texttt{TOK\_ANNOT\_RAW}).
+        \end{itemize}
+
+        Cada anotación finaliza con un byte nulo (\texttt{0x00}), permitiendo delimitación inequívoca durante la decodificación.
+
+    \end{itemize}
+
+\end{itemize}
+
+\end{itemize}
+\end{tcolorbox}
+
+\subsubsection{Propiedades estructurales del formato}
+
+CPG5 adopta un diseño híbrido entre estructura secuencial y acceso indexado:
+
+\begin{itemize}
+\item El encabezado global es un bitstream comprimido de longitud explícita.
+\item Cada partida es independiente y autocontenida mediante su longitud en bytes.
+\item Los movimientos están optimizados como codificación entropía-adyacente al espacio de estados del ajedrez.
+\end{itemize}
+
+Esta estructura permite:
+
+\begin{itemize}
+\item decodificación streaming parcial,
+\item acceso directo a partidas individuales,
+\item paralelización de procesamiento sin dependencias globales,
+\item y reconstrucción exacta bit-a-bit del archivo original.
+\end{itemize}
+
+\subsubsection{Invarianza del formato}
+
+El diseño de CPG5 garantiza que cualquier implementación compatible produce exactamente la misma salida binaria, siempre que:
+
+\begin{itemize}
+\item el orden de movimientos legales sea determinista,
+\item la codificación de cabeceras respete el mismo estado incremental,
+\item y el padding de bits se realice exclusivamente al final de cada bloque.
+\end{itemize}
+
+Esto convierte el formato en un sistema completamente reproducible y apto para compresión sin pérdida de datos estructurales del PGN.
+
+\section{Resultados}
+
+
+\section{Conclusiones}
+
+
+\newpage
 \addcontentsline{toc}{section}{Referencias}
-\bibliographystyle{plain}
-\bibliography{references}
+\begin{thebibliography}{9}
+    \bibitem{repo}
+    Código fuente provisto del módulo CPG5: \texttt{encode\_game\_chess.py}, \texttt{decode\_headers.py}, \texttt{player\_names.py}, \texttt{constant\_types.py}, \texttt{frequencies.py}.
+    \bibitem{huffman}
+    David A. Huffman, \textit{A Method for the Construction of Minimum-Redundancy Codes}, Proceedings of the IRE, 1952.
+    \bibitem{pythonchess}
+    Biblioteca \texttt{python-chess}. Implementación de las reglas y generación de movimientos legales.
+\end{thebibliography}
 
 \end{document}
