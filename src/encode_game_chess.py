@@ -31,6 +31,12 @@ TOK_ANNOT_EVAL = 0x01
 TOK_ANNOT_MATE = 0x02
 TOK_ANNOT_CLK  = 0x03
 TOK_ANNOT_RAW  = 0x04
+TOK_ANNOT_NAG  = 0x05
+TOK_ANNOT_SAN  = 0x06  # original SAN token when it differs from canonical
+
+_NAG_SUFFIX_TO_CODE = {'!': 1, '?': 2, '!!': 3, '??': 4, '!?': 5, '?!': 6}
+_DOLLAR_TO_CODE     = {'$1': 1, '$2': 2, '$3': 3, '$4': 4, '$5': 5, '$6': 6}
+_CODE_TO_NAG        = {1: '!', 2: '?', 3: '!!', 4: '??', 5: '!?', 6: '?!'}
 
 _ANNOT_RE = re.compile(rb'\{([^}]*)\}')
 _EVAL_RE  = re.compile(rb'\[%eval\s+(#-?\d+|-?\d+(?:\.\d+)?)\]')
@@ -57,6 +63,22 @@ def _split_pgn_games(text: str) -> list[tuple[str, str]]:
     if headers:
         games.append(('\n'.join(headers), '\n'.join(moves)))
     return games
+
+
+def _build_ply_annot_bytes(nag_code: int, curly_content: bytes | None, original_san: str | None) -> bytes:
+    """Build the full annotation blob for one ply."""
+    out = bytearray()
+    if nag_code:
+        out += bytes([TOK_ANNOT_NAG, nag_code])
+    if original_san is not None:
+        san_b = original_san.encode('latin-1')
+        n = min(len(san_b), 255)
+        out += bytes([TOK_ANNOT_SAN, n]) + san_b[:n]
+    if curly_content is not None:
+        curly_encoded = _encode_annot_bytes(curly_content)
+        out += curly_encoded[:-1]  # strip the \x00 terminator added by _encode_annot_bytes
+    out += b'\x00'
+    return bytes(out)
 
 
 def _encode_annot_bytes(content: bytes) -> bytes:
@@ -106,7 +128,7 @@ def _encode_game(moves_text: str) -> bytes:
     raw = _ANNOT_RE.sub(_pull, raw)
 
     result_code = 3  # default: *
-    # plies: list of [chess.Move, annot_bytes_or_None]
+    # plies: list of [chess.Move, curly_content_or_None, nag_code, original_san_or_None]
     plies: list[list] = []
     annot_idx = 0
 
@@ -116,7 +138,7 @@ def _encode_game(moves_text: str) -> bytes:
         # Any text in the following categories is ignored for move parsing and not included in the bit-packed data, since it doesn't affect the board state:
         if tok == b'\x7f':                           # annotation placeholder
             if plies:
-                plies[-1][1] = _encode_annot_bytes(annot_queue[annot_idx])
+                plies[-1][1] = annot_queue[annot_idx]  # store raw content for later encoding
             annot_idx += 1
             continue
 
@@ -128,42 +150,50 @@ def _encode_game(moves_text: str) -> bytes:
             continue
 
         if tok_s.startswith('$'):                    # NAG token ($1, $2, ...)
+            nag_code = _DOLLAR_TO_CODE.get(tok_s, 0)
+            if plies and nag_code:
+                plies[-1][2] = nag_code
             continue
 
         if tok_s in ('(', ')'):                      # variation delimiters
             continue
 
         if set(tok_s) <= set('!?') and tok_s:        # standalone NAG symbol
+            nag_code = _NAG_SUFFIX_TO_CODE.get(tok_s, 0)
+            if plies and nag_code:
+                plies[-1][2] = nag_code
             continue
 
-        # SAN move — strip NAG suffixes before parsing
+        # SAN move — extract and strip NAG suffix before parsing
         clean = tok_s.rstrip('!?')
+        nag_suffix = tok_s[len(clean):]
+        nag_code = _NAG_SUFFIX_TO_CODE.get(nag_suffix, 0)
         move = board.parse_san(clean)
+        # Preserve original SAN if it differs from the canonical form python-chess generates
+        canonical = board.san(move)
+        original_san = clean if clean != canonical else None
         board.push(move)
-        plies.append([move, None])
+        plies.append([move, None, nag_code, original_san])
 
     ply_count = len(plies)
 
-    # Build bit stream
+    # Build byte stream — 1 byte per move index (Huffman-friendly)
     board2 = chess.Board()
     m_bytes = bytearray()
-    for move, annot in plies:
-        # given the current state of the board, what moves are legal?
+    for move, curly, nag, orig_san in plies:
         legal = list(board2.legal_moves)
-        n     = len(legal)
         idx   = next(i for i, m in enumerate(legal) if m == move)
-        # Tots els moves els allarguem a simbols de 8 bits
-        
         m_bytes.append(idx)
-        if annot:
+        if curly is not None or nag or orig_san is not None:
             m_bytes.append(254)
         board2.push(move)
 
-    #pad = (8 - len(bits) % 8) % 8 Ya no es necessari ja que ja ho fem que tanqui en un multiple de 8
-    #bits.extend('0' * pad)
 
-
-    annot_blob = b''.join(a for _, a in plies if a)
+    annot_blob = b''.join(
+        _build_ply_annot_bytes(nag, curly, orig_san)
+        for _, curly, nag, orig_san in plies
+        if curly is not None or nag or orig_san is not None
+    )
 
     
     return (
@@ -319,14 +349,23 @@ def encode_pgn_file_chess(input_path: str, output_path: str) -> None:
     print(f"  {orig:,} B → {compr:,} B  (ratio {orig/compr:.2f}×)")
 
 
-def _decode_annot_bytes(data: bytes, pos: int) -> tuple[str, int]:
-    """Read TOK_ANNOT_* tokens until 0x00; return annotation string and new pos."""
+def _decode_annot_bytes(data: bytes, pos: int) -> tuple[str, str, str, int]:
+    """Read TOK_ANNOT_* tokens until 0x00; return (nag_suffix, stored_san, annotation_str, new_pos)."""
+    nag_suffix = ''
+    stored_san = ''
     parts = []
     while pos < len(data):
         b = data[pos]
         if b == 0x00:
             pos += 1
             break
+        elif b == TOK_ANNOT_NAG:
+            nag_suffix = _CODE_TO_NAG.get(data[pos+1], '')
+            pos += 2
+        elif b == TOK_ANNOT_SAN:
+            n = data[pos+1]
+            stored_san = data[pos+2:pos+2+n].decode('latin-1')
+            pos += 2 + n
         elif b == TOK_ANNOT_EVAL:
             cp  = struct.unpack('>h', data[pos+1:pos+3])[0]
             val = f'{cp/100:.1f}' if cp % 10 == 0 else f'{cp/100:.2f}'
@@ -347,9 +386,11 @@ def _decode_annot_bytes(data: bytes, pos: int) -> tuple[str, int]:
             pos += 2 + n
         else:
             break
+    if not parts:
+        return nag_suffix, stored_san, '', pos
     if len(parts) == 1 and parts[0].startswith('{'):
-        return parts[0], pos   # already a fully-formed {…} string
-    return '{ ' + ' '.join(parts) + ' }', pos
+        return nag_suffix, stored_san, parts[0], pos
+    return nag_suffix, stored_san, '{ ' + ' '.join(parts) + ' }', pos
 
 
 def _decode_game(block: bytes) -> str:
@@ -372,11 +413,11 @@ def _decode_game(block: bytes) -> str:
         ply_info.append((move, has_annot))
 
     # Read annotation bytes in ply order
-    annots: list[str] = []
+    annots: list[tuple[str, str, str]] = []  # (nag_suffix, stored_san, annot_str)
     for _, has_annot in ply_info:
         if has_annot:
-            s, pos = _decode_annot_bytes(block, pos)
-            annots.append(s)
+            nag, stored_san, annot_str, pos = _decode_annot_bytes(block, pos)
+            annots.append((nag, stored_san, annot_str))
 
     # Reconstruct move text
     board2   = chess.Board()
@@ -389,14 +430,23 @@ def _decode_game(block: bytes) -> str:
             parts.append(f'{full_move}.')
         elif prev_had_annot:
             parts.append(f'{full_move}...')
-        san = board2.san(move)
-        board2.push(move)
-        parts.append(san)
         if has_annot:
-            parts.append(next(annot_it))
-        prev_had_annot = has_annot
+            nag, stored_san, annot_str = next(annot_it)
+            san = stored_san if stored_san else board2.san(move)
+            board2.push(move)
+            parts.append(san + nag)
+            if annot_str:
+                parts.append(annot_str)
+            prev_had_annot = bool(annot_str)
+        else:
+            parts.append(board2.san(move))
+            board2.push(move)
+            prev_had_annot = False
 
-    parts.append(_RESULT_DEC[result_code])
+    result_str = _RESULT_DEC[result_code]
+    if not parts:
+        return ' ' + result_str
+    parts.append(result_str)
     return ' '.join(parts)
 
 def _safe_decode_game_worker(args: tuple[int, bytes]) -> tuple[int, str, str]:

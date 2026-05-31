@@ -1,7 +1,25 @@
 # chessmasterCompresor3000
 
-Compresor de partidas de ajedrez en python.
+## Requisitos
 
-El script `test_all.py` utiliza el algoritmo que le proporciones para comprimir y descomprimir un conjunto de archivos. Extrae métricas como el ratio de compresión, velocidad de compresión y descompresión, y si ha pasado los tests de comparación con el archivo original tras descomprimir.
+El ejecutable requiere tener **Python 3.9 o superior** instalado, junto con las siguientes librerías:
 
-Nuestra mejor versión ahora mismo es `src/encode_game_chess.py`, el único problema es que es bastante lenta.
+```bash
+pip install chess bitarray numpy
+```
+
+## Instrucciones de uso
+
+Si el ejecutable no tiene permisos de ejecución (puede ocurrir al descomprimir un zip), ejecutar primero:
+
+```bash
+chmod +x compress.cdi
+```
+
+Luego:
+
+```bash
+./compress.cdi <infile> <outfile>
+```
+
+El programa detecta automáticamente si ha de comprimir o descomprimir leyendo los 4 primeros bytes de `infile`. Si encuentra la cabecera `CPG5` (cabecera específica de nuestro compresor), descomprime el archivo. En caso contrario, comprime.

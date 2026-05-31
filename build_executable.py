@@ -1,34 +1,45 @@
 #!/usr/bin/env python3
-"""Build compress.cdi standalone executable from compress.py using PyInstaller."""
-import subprocess
-import sys
-import os
+"""Build compress.cdi as a Python zipapp (no bundled interpreter — users install deps once)."""
+import shutil
+import stat
+import tempfile
+import zipapp
+from pathlib import Path
 
-# Este codigo es para crear el ejecutable a partir del script compress.py usando PyInstaller. Se ejecuta desde la terminal con:
-# python build_executable.py
+# Requires Python ≥ 3.5 and the following packages installed in the active environment:
+#   chess  bitarray  numpy
+# Run:  python build_executable.py
+# Or:   uv run python build_executable.py
 
-# IMPORTANTE: Antes de ejecutar este script, asegúrate de que tu entorno con python tenga todo instalado para que funcione la app, ya que el ejecutable se construirá con las dependencias del entorno actual.
-
-# Para esto es muy util que utiliceis uv, que es el gestor de entornos que uso yo. Cualquiero otro gestor vale, lo digo para que no metais vuestros entornos de python globales enteros, que seguros que están llenos de paquetes innecesarios.
 def main():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    os.chdir(script_dir)
+    project = Path(__file__).parent.resolve()
+    dist = project / 'dist'
+    dist.mkdir(exist_ok=True)
+    out = dist / 'compress.cdi'
 
-    cmd = [
-        sys.executable, "-m", "PyInstaller",
-        "--onefile",
-        "--name", "compress.cdi",
-        "compress.py",
-    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
 
-    print("Building compress.cdi ...")
-    result = subprocess.run(cmd)
+        # __main__.py is the entry point inside the zip
+        shutil.copy(project / 'compress.py', tmp / '__main__.py')
 
-    if result.returncode == 0:
-        print("\nDone! Executable at: dist/compress.cdi")
-    else:
-        print("\nBuild failed.", file=sys.stderr)
-        sys.exit(result.returncode)
+        # Bundle src/ excluding pycache and non-code files
+        shutil.copytree(
+            project / 'src', tmp / 'src',
+            ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '*.md'),
+        )
 
-if __name__ == "__main__":
+        zipapp.create_archive(
+            str(tmp),
+            str(out),
+            interpreter='/usr/bin/env python3',
+        )
+
+    # Make executable
+    out.chmod(out.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    size_kb = out.stat().st_size // 1024
+    print(f"Done! Executable at: dist/compress.cdi  ({size_kb} kB)")
+
+if __name__ == '__main__':
     main()

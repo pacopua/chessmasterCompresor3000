@@ -1,0 +1,3 @@
+chess
+bitarray
+numpy
