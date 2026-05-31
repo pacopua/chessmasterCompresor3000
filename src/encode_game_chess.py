@@ -90,6 +90,7 @@ def _encode_annot_bytes(content: bytes) -> bytes:
     return bytes(out)
 
 
+
 def _encode_game(moves_text: str) -> bytes:
     """Encode one game's move text → move block bytes."""
     # initialize the board to emulate
@@ -145,28 +146,30 @@ def _encode_game(moves_text: str) -> bytes:
 
     # Build bit stream
     board2 = chess.Board()
-    bits   = bitLib.bitarray()
+    m_bytes = bytearray()
     for move, annot in plies:
         # given the current state of the board, what moves are legal?
         legal = list(board2.legal_moves)
         n     = len(legal)
         idx   = next(i for i, m in enumerate(legal) if m == move)
-        # esto es el numero minimo de bits necesario para codificar esta cantidad de movimientos! El decodificador hará lo mismo para saber cuántos bits tiene que leer
-        width = math.ceil(math.log2(n)) if n > 1 else 0
-        if width:
-            bits.extend(format(idx, f'0{width}b'))
-        bits.append(1 if annot else 0)
+        # Tots els moves els allarguem a simbols de 8 bits
+        
+        m_bytes.append(idx)
+        if annot:
+            m_bytes.append(254)
         board2.push(move)
 
-    pad = (8 - len(bits) % 8) % 8
-    bits.extend('0' * pad)
+    #pad = (8 - len(bits) % 8) % 8 Ya no es necessari ja que ja ho fem que tanqui en un multiple de 8
+    #bits.extend('0' * pad)
+
 
     annot_blob = b''.join(a for _, a in plies if a)
 
+    
     return (
-        struct.pack('>H', ply_count) +
-        struct.pack('>B', result_code) +
-        bits.tobytes() +
+        struct.pack('>H', ply_count)+
+        struct.pack('>B', result_code)+
+        m_bytes+
         annot_blob
     )
 
@@ -178,12 +181,92 @@ def _safe_encode_game_worker(args: tuple[int, str]) -> tuple[int, bytes, str]:
     except Exception as e:
         return idx, struct.pack('>HB', 0, 3), str(e)
 
+
+
+
+import heapq
+from collections import Counter
+from bitarray import bitarray
+
+
+class Node:
+    def __init__(self, sym=None, freq=0, left=None, right=None):
+        self.sym = sym
+        self.freq = freq
+        self.left = left
+        self.right = right
+
+    def __lt__(self, other):
+        return self.freq < other.freq
+
+def build_tree(data: bytearray):
+    freq = Counter(data)
+    heap = [Node(sym=s, freq=f) for s, f in freq.items()]
+    heapq.heapify(heap)
+
+    if len(heap) == 1:
+        return heap[0]
+
+    while len(heap) > 1:
+        a = heapq.heappop(heap)
+        b = heapq.heappop(heap)
+        merged = Node(freq=a.freq + b.freq, left=a, right=b)
+        heapq.heappush(heap, merged)
+
+    return heap[0]
+
+
+def build_codes(node, prefix="", table=None):
+    if table is None:
+        table = {}
+
+    if node.sym is not None:
+        table[node.sym] = prefix or "0"
+        return table
+
+    build_codes(node.left, prefix + "0", table)
+    build_codes(node.right, prefix + "1", table)
+
+    return table
+
+
+
+def huffman_compress(data: bytearray):
+    tree = build_tree(data)
+    codes = build_codes(tree)
+
+    b = bitarray()
+    b.extend(''.join(codes[x] for x in data))
+
+    return b, tree
+
+def serialize_tree(root):
+    out = bytearray()
+
+    i = 0
+    def dfs(node):
+        nonlocal i
+        if node.left is None and node.right is None:
+            out.append(1)
+            out.append(node.sym) 
+            i += 2
+        else:
+            out.append(0)
+            i += 1
+            dfs(node.left)
+            dfs(node.right)
+
+    dfs(root)
+    return bytes(out), i
+
+
+
+
 def encode_pgn_file_chess(input_path: str, output_path: str) -> None:
     with open(input_path, 'r', encoding='utf-8') as f:
         text = f.read()
 
     games = _split_pgn_games(text)
-    print(f"  {len(games)} games")
 
     # Sequentially encode headers
     header_bits = bitLib.bitarray()
@@ -205,7 +288,7 @@ def encode_pgn_file_chess(input_path: str, output_path: str) -> None:
         
         for idx, block, error in results:
             if error:
-                print(f"  WARNING game {idx+1}: {error}")
+                print(f"  WARNING encoding game {idx+1}: {error}")
             move_blocks[idx] = block
 
     # Pre-allocate bytearray for faster batched writing
@@ -214,10 +297,23 @@ def encode_pgn_file_chess(input_path: str, output_path: str) -> None:
     out_buffer.extend(struct.pack('>I', len(header_bits)))
     out_buffer.extend(header_bits.tobytes())
     out_buffer.extend(struct.pack('>I', len(games)))
+
     
-    for block in move_blocks:
-        out_buffer.extend(struct.pack('>I', len(block)))
-        out_buffer.extend(block)
+    all_blocks = bytearray()
+    for g in move_blocks:
+        all_blocks.extend(g)
+    
+    games_huffman, tree = huffman_compress(all_blocks)
+    
+    tree_serialized, i = serialize_tree(tree)
+
+    print(len(all_blocks))
+    out_buffer.extend(struct.pack('>I', i))
+    out_buffer.extend(tree_serialized)
+    out_buffer.extend(all_blocks)
+    #for block in move_blocks:
+    #    out_buffer.extend(struct.pack('>I', len(block)))
+    #    out_buffer.extend(block)
 
     with open(output_path, 'wb') as f:
         f.write(out_buffer)
@@ -327,6 +423,38 @@ def _safe_decode_game_worker(args: tuple[int, bytes]) -> tuple[int, str, str]:
     except Exception as e:
         return idx, "", str(e)
 
+def deserialize_tree(data):
+    i = 0
+
+    def dfs():
+        nonlocal i
+        flag = data[i]
+        i += 1
+        if flag == 1:
+            byte = data[i]
+            i += 1
+            
+            return Node(sym=byte)
+        else:
+            left = dfs()
+            right = dfs()
+            return Node(left=left, right=right)
+
+    return dfs(), i
+
+def huffman_decompress(bits: bitarray, tree):
+    out = bytearray()
+    node = tree
+
+    for bit in bits:
+        node = node.left if bit == 0 else node.right
+
+        if node.sym is not None:
+            out.append(node.sym)
+            node = tree
+
+    return out
+
 def decode_pgn_file_chess(input_path: str, output_path: str) -> None:
     with open(input_path, 'rb') as f:
         raw = f.read()
@@ -353,7 +481,26 @@ def decode_pgn_file_chess(input_path: str, output_path: str) -> None:
 
     n_games = struct.unpack_from('>I', raw, pos)[0]; pos += 4
 
-    # 2. Fast Sequential Block Extraction
+    #2. Decompressing of game data before block extraction
+    length_tree = struct.unpack_from('>I', raw, pos)[0]
+    pos += 4
+    
+    
+    tree,_ = deserialize_tree(raw[pos:pos+length_tree])
+    
+    pos += length_tree
+
+    huffman_comp = raw[pos:]
+    huffman_comp = bitarray(huffman_comp)
+    huffman_decomp = huffman_decompress(huffman_comp,tree)
+
+    huffman_decomp = raw[pos:]
+    print(type(huffman_decomp))
+    #pos = 0
+    
+
+
+    # 3. Fast Sequential Block Extraction
     # Slice out the raw byte blocks quickly before parallelizing
     game_blocks: list[bytes] = []
     for _ in range(n_games):
@@ -361,7 +508,7 @@ def decode_pgn_file_chess(input_path: str, output_path: str) -> None:
         game_blocks.append(raw[pos:pos+block_len])
         pos += block_len
 
-    # 3. Parallel Decoding of Chess Logic
+    # 4. Parallel Decoding of Chess Logic
     game_moves: list[str] = [""] * n_games
     decode_args = [(i, block) for i, block in enumerate(game_blocks)]
 

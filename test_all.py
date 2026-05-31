@@ -52,16 +52,16 @@ def main():
         dec_time = 0.0
 
         try:
-            with contextlib.redirect_stdout(io.StringIO()):
-                t0 = time.perf_counter()
-                encode_pgn_file_chess(pgn_path, enc1)
-                enc_time = time.perf_counter() - t0
-                    
-                t0 = time.perf_counter()
-                decode_pgn_file_chess(enc1, dec1)
-                dec_time = time.perf_counter() - t0
+            #with contextlib.redirect_stdout(io.StringIO()):
+            t0 = time.perf_counter()
+            encode_pgn_file_chess(pgn_path, enc1)
+            enc_time = time.perf_counter() - t0
+                
+            t0 = time.perf_counter()
+            decode_pgn_file_chess(enc1, dec1)
+            dec_time = time.perf_counter() - t0
 
-                encode_pgn_file_chess(dec1, enc2)
+            encode_pgn_file_chess(dec1, enc2)
         except Exception as e:
             print(f"{name:<25}  ERROR: {e}")
 
