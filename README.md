@@ -13,4 +13,4 @@ user@host> compress.cdi <infile> <outfile>
 
 En la linea de comandos
 
-La forma en que el código detecta si ha de codificar o decodificar es leyendo los 4 primeros carácteres del archivo `infile`. Hemos hecho que nuestro codificador escriba GPC5 (5 es el número de la iteración de nuestra implementación) en los primeros 4 bytes del binario comprimido. De esta forma, si el programa lee GPC5, sabrá que tiene que descomprimir, en caso contrario, sabrá que ha de comprimir.
+La forma en que el código detecta si ha de codificar o decodificar es leyendo los 4 primeros carácteres del archivo `infile`. Hemos hecho que nuestro codificador escriba CPG5 (5 es el número de la iteración de nuestra implementación) en los primeros 4 bytes del binario comprimido. De esta forma, si el programa lee CPG5, sabrá que tiene que descomprimir, en caso contrario, sabrá que ha de comprimir.
