@@ -10,12 +10,13 @@ Prints per-file compression ratio and a pass/fail result.
 Exits with code 1 if any file fails.
 """
 
-import os
-import sys
-import glob
-import time
+import difflib
 import io
 import contextlib
+import glob
+import os
+import sys
+import time
 
 from src.encode_game_chess import encode_pgn_file_chess, decode_pgn_file_chess
 
@@ -35,7 +36,7 @@ def main():
     SPEED_MIN_KB = 250  # KB/s threshold
 
     print(f"{'File':<25} {'Orig':>10} {'Comp':>10} {'Ratio':>7} {'Enc KB/s':>10} {'Dec KB/s':>10}  Result")
-    print("-" * 85)
+    print("-" * 93)
 
     total_orig5 = total_comp5 = 0
     total_enc_t = total_dec_t = 0.0
@@ -88,25 +89,44 @@ def main():
         total_enc_t += enc_time
         total_dec_t += dec_time
 
+        # Check compressed files are stable (encode is deterministic)
         with open(enc1, 'rb') as f: b1 = f.read()
         with open(enc2, 'rb') as f: b2 = f.read()
-        status = "PASS" if b1 == b2 else "FAIL"
-        
-        if status == "FAIL":
+        stable = b1 == b2
+
+        # Check decoded text matches original (normalize leading/trailing whitespace
+        # per line so input quirks like " 0-1" compare equal to our output "0-1")
+        def _norm(lines):
+            return [l.strip() + '\n' for l in lines]
+        with open(pgn_path, encoding='utf-8') as f: orig_lines = _norm(f.readlines())
+        with open(dec1,     encoding='utf-8') as f: dec_lines  = _norm(f.readlines())
+        diff = list(difflib.unified_diff(orig_lines, dec_lines, fromfile="original", tofile="decoded", n=0))
+        fidelity = len(diff) == 0
+
+        # Stability is the hard pass/fail: same binary means same chess moves
+        # Text diff is a warning only — original PGNs may use non-canonical SAN
+        # (e.g. Ne7c6 vs N7c6) which our encoder normalises to the PGN standard
+        status = "PASS" if stable else "FAIL"
+        if not stable:
             all_pass5 = False
             for i, (a, b) in enumerate(zip(b1, b2)):
                 if a != b:
-                    print(f"  first diff at byte {i}: {a:#04x} vs {b:#04x}")
+                    print(f"  STABILITY FAIL: first diff at byte {i}: {a:#04x} vs {b:#04x}")
                     break
+
+        if not fidelity:
+            print(f"  DIFF WARN: {len(diff)} lines differ (SAN normalisation or formatting):")
+            for line in diff[:6]:
+                print(f"    {line}", end="")
 
         slow = " ENC_SLOW" if enc_kbs < SPEED_MIN_KB else ""
         slow += " DEC_SLOW" if dec_kbs < SPEED_MIN_KB else ""
         if slow:
             all_pass5 = False
-            
+
         print(f"{name:<25} {orig_size:>10,} {comp_size:>10,} {ratio:>6.2f}× {enc_kbs:>10.1f} {dec_kbs:>10.1f}  {status}{slow}")
 
-    print("-" * 85)
+    print("-" * 93)
     ov5      = total_orig5 / total_comp5 if total_comp5 else 0
     total_kb = total_orig5 / 1024
     avg_enc  = total_kb / total_enc_t if total_enc_t else 0

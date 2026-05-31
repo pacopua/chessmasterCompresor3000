@@ -1,16 +1,25 @@
 # chessmasterCompresor3000
 
-## Requisitos para compilar
+## Requisitos
 
-El código hecho en python se ha convertido en un único ejecutable utilizando `PyInstaller`. Esto significa que no hay ningún requisito en específico para poder ejecutar la aplicación! No se ha de tener python instalado siquiera, puesto que `PyInstaller` comprime un entorno de python con todo lo necesario para ejecutar el código.
+El ejecutable requiere tener **Python 3.9 o superior** instalado, junto con las siguientes librerías:
+
+```bash
+pip install chess bitarray numpy
+```
 
 ## Instrucciones de uso
 
-Como especifica el PDF de la practica, el ejecutable se ejecuta de la siguiente forma:
+Si el ejecutable no tiene permisos de ejecución (puede ocurrir al descomprimir un zip), ejecuta primero:
+
 ```bash
-user@host> compress.cdi <infile> <outfile>
+chmod +x compress.cdi
 ```
 
-En la linea de comandos
+Luego:
 
-La forma en que el código detecta si ha de codificar o decodificar es leyendo los 4 primeros carácteres del archivo `infile`. Hemos hecho que nuestro codificador escriba CPG5 (5 es el número de la iteración de nuestra implementación) en los primeros 4 bytes del binario comprimido. De esta forma, si el programa lee CPG5, sabrá que tiene que descomprimir, en caso contrario, sabrá que ha de comprimir.
+```bash
+./compress.cdi <infile> <outfile>
+```
+
+El programa detecta automáticamente si ha de comprimir o descomprimir leyendo los 4 primeros bytes de `infile`. Si encuentra la cabecera `CPG5` (que escribe nuestro compresor), descomprime; en caso contrario, comprime.

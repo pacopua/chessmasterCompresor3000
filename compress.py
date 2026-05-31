@@ -2,6 +2,9 @@
 import sys
 import os
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from src.encode_game_chess import encode_pgn_file_chess, decode_pgn_file_chess
+
 MAGIC = b'CPG5'
 
 def detect_mode(infile: str) -> str:
@@ -19,9 +22,6 @@ def main():
     if not os.path.isfile(infile):
         print(f"Error: '{infile}' not found", file=sys.stderr)
         sys.exit(1)
-
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from src.encode_game_chess import encode_pgn_file_chess, decode_pgn_file_chess
 
     mode = detect_mode(infile)
     if mode == 'decode':
