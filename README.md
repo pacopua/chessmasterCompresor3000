@@ -1,7 +1,16 @@
 # chessmasterCompresor3000
 
-Compresor de partidas de ajedrez en python.
+## Requisitos para compilar
 
-El script `test_all.py` utiliza el algoritmo que le proporciones para comprimir y descomprimir un conjunto de archivos. Extrae métricas como el ratio de compresión, velocidad de compresión y descompresión, y si ha pasado los tests de comparación con el archivo original tras descomprimir.
+El código hecho en python se ha convertido en un único ejecutable utilizando `PyInstaller`. Esto significa que no hay ningún requisito en específico para poder ejecutar la aplicación! No se ha de tener python instalado siquiera, puesto que `PyInstaller` comprime un entorno de python con todo lo necesario para ejecutar el código.
 
-Nuestra mejor versión ahora mismo es `src/encode_game_chess.py`, el único problema es que es bastante lenta.
+## Instrucciones de uso
+
+Como especifica el PDF de la practica, el ejecutable se ejecuta de la siguiente forma:
+```bash
+user@host> compress.cdi <infile> <outfile>
+```
+
+En la linea de comandos
+
+La forma en que el código detecta si ha de codificar o decodificar es leyendo los 4 primeros carácteres del archivo `infile`. Hemos hecho que nuestro codificador escriba GPC5 (5 es el número de la iteración de nuestra implementación) en los primeros 4 bytes del binario comprimido. De esta forma, si el programa lee GPC5, sabrá que tiene que descomprimir, en caso contrario, sabrá que ha de comprimir.
