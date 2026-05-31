@@ -301,19 +301,15 @@ def encode_pgn_file_chess(input_path: str, output_path: str) -> None:
     
     all_blocks = bytearray()
     for g in move_blocks:
+        all_blocks.extend(struct.pack('>I', len(g)))
         all_blocks.extend(g)
-    
+
     games_huffman, tree = huffman_compress(all_blocks)
-    
     tree_serialized, i = serialize_tree(tree)
 
-    print(len(all_blocks))
     out_buffer.extend(struct.pack('>I', i))
     out_buffer.extend(tree_serialized)
-    out_buffer.extend(all_blocks)
-    #for block in move_blocks:
-    #    out_buffer.extend(struct.pack('>I', len(block)))
-    #    out_buffer.extend(block)
+    out_buffer.extend(games_huffman.tobytes())
 
     with open(output_path, 'wb') as f:
         f.write(out_buffer)
@@ -363,29 +359,17 @@ def _decode_game(block: bytes) -> str:
     result_code = struct.unpack_from('>B', block, pos)[0]; pos += 1
 
     board = chess.Board()
-    bits  = bitLib.bitarray()
-    bits.frombytes(block[pos:])
-    bit_pos = 0
-
     ply_info: list[tuple[chess.Move, bool]] = []
 
     for _ in range(ply_count):
         legal = list(board.legal_moves)
-        n     = len(legal)
-        width = math.ceil(math.log2(n)) if n > 1 else 0
-        if width:
-            idx = int(bits[bit_pos:bit_pos+width].to01(), 2)
-            bit_pos += width
-        else:
-            idx = 0
-        has_annot = bool(bits[bit_pos])
-        bit_pos  += 1
+        idx = block[pos]; pos += 1
+        has_annot = pos < len(block) and block[pos] == 254
+        if has_annot:
+            pos += 1
         move = legal[idx]
         board.push(move)
         ply_info.append((move, has_annot))
-
-    # Advance pos past the bit-packed bytes (rounded up to byte boundary)
-    pos += (bit_pos + 7) // 8
 
     # Read annotation bytes in ply order
     annots: list[str] = []
@@ -490,23 +474,17 @@ def decode_pgn_file_chess(input_path: str, output_path: str) -> None:
     
     pos += length_tree
 
-    huffman_comp = raw[pos:]
-    huffman_comp = bitarray(huffman_comp)
-    huffman_decomp = huffman_decompress(huffman_comp,tree)
+    huffman_comp = bitarray()
+    huffman_comp.frombytes(raw[pos:])
+    huffman_decomp = huffman_decompress(huffman_comp, tree)
 
-    huffman_decomp = raw[pos:]
-    print(type(huffman_decomp))
-    #pos = 0
-    
-
-
-    # 3. Fast Sequential Block Extraction
-    # Slice out the raw byte blocks quickly before parallelizing
+    # 3. Fast Sequential Block Extraction from decompressed data
     game_blocks: list[bytes] = []
+    dpos = 0
     for _ in range(n_games):
-        block_len = struct.unpack_from('>I', raw, pos)[0]; pos += 4
-        game_blocks.append(raw[pos:pos+block_len])
-        pos += block_len
+        block_len = struct.unpack_from('>I', huffman_decomp, dpos)[0]; dpos += 4
+        game_blocks.append(bytes(huffman_decomp[dpos:dpos+block_len]))
+        dpos += block_len
 
     # 4. Parallel Decoding of Chess Logic
     game_moves: list[str] = [""] * n_games
