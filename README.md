@@ -10,7 +10,7 @@ pip install chess bitarray numpy
 
 ## Instrucciones de uso
 
-Si el ejecutable no tiene permisos de ejecución (puede ocurrir al descomprimir un zip), ejecuta primero:
+Si el ejecutable no tiene permisos de ejecución (puede ocurrir al descomprimir un zip), ejecutar primero:
 
 ```bash
 chmod +x compress.cdi
@@ -22,4 +22,4 @@ Luego:
 ./compress.cdi <infile> <outfile>
 ```
 
-El programa detecta automáticamente si ha de comprimir o descomprimir leyendo los 4 primeros bytes de `infile`. Si encuentra la cabecera `CPG5` (que escribe nuestro compresor), descomprime; en caso contrario, comprime.
+El programa detecta automáticamente si ha de comprimir o descomprimir leyendo los 4 primeros bytes de `infile`. Si encuentra la cabecera `CPG5` (cabecera específica de nuestro compresor), descomprime el archivo. En caso contrario, comprime.
