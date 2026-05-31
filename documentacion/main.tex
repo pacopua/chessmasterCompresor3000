@@ -59,11 +59,11 @@ Para resolver este problema, hemos diseñado e implementado el formato \textbf{C
 
 \section{Metodología de Compresión}
 
-El motor de compresión divide su operación en dos grandes dominios: la metadata de las partidas (cabeceras) y la lógica de los movimientos.
+El compresor divide el proceso en dos grandes dominios: las cabeceras y los movimientos de las partidas.
 
 \subsection{Codificación de Cabeceras (Headers)}
 
-Las cabeceras se comprimen mediante un esquema híbrido implementado en \texttt{encode\_headers.py} y \texttt{constant\_types.py}, que combina codificación por bits fijos, modelos estadísticos y técnicas de diccionario.
+Cada tag del header se identifica mediante un prefijo de 5 bits, lo que permite representar hasta 32 etiquetas distintas. El formato reconoce 17 tags estándar (\texttt{ECO}, \texttt{Opening}, \texttt{TimeControl}, \texttt{Termination}, \texttt{WhiteTitle}, \texttt{BlackTitle}, \texttt{WhiteElo}, \texttt{BlackElo}, \texttt{Event}, \texttt{Site}, \texttt{White}, \texttt{Black}, \texttt{Result}, \texttt{UTCDate}, \texttt{UTCTime}, \texttt{WhiteRatingDiff}, \texttt{BlackRatingDiff}), un marcador de fin de cabeceras (\texttt{SEACABO}, código \texttt{00000}) y un código de escape para etiquetas no reconocidas (\texttt{UNKNOWN\_TAG}, código \texttt{11111}). Cuando el encoder encuentra una etiqueta desconocida, emite \texttt{UNKNOWN\_TAG} seguido del nombre del tag y su valor como cadenas UTF-8 en crudo, garantizando compatibilidad hacia adelante.
 
 \subsubsection{Codificación estructurada por tipo de campo}
 
@@ -77,33 +77,43 @@ Los valores numéricos se representan mediante empaquetado de bits de longitud f
 
 Cuando un valor no pertenece al rango representable o no es válido, se utiliza un código de escape (\texttt{UNKNOWN\_TEXT}) seguido de la cadena original en UTF-8, preservando la pérdida cero de información.
 
-\paragraph{Campos categóricos}
-Los campos con dominio finito utilizan tablas de codificación estáticas basadas en el corpus:
+\paragraph{Campos categóricos con tabla fija}
+Los campos con un dominio finito y pequeño utilizan tablas de codificación estáticas de longitud fija:
 
 \begin{itemize}
-    \item \texttt{Result}
-    \item \texttt{Termination}
-    \item \texttt{WhiteTitle}, \texttt{BlackTitle}
-    \item \texttt{Event}
-    \item \texttt{Opening}
-    \item \texttt{ECO}
+    \item \texttt{Result}: 3 bits (4 valores posibles).
+    \item \texttt{Termination}: 3 bits (4 valores posibles).
+    \item \texttt{WhiteTitle}, \texttt{BlackTitle}: 3 bits cada uno (6 títulos más centinela).
 \end{itemize}
 
-En particular, el código ECO se descompone en dos componentes:
+El código \texttt{ECO} se descompone en dos componentes:
 
 \begin{itemize}
-    \item Letra (\texttt{A--E}), codificada mediante tabla fija.
+    \item Letra (\texttt{A--E}), codificada en 3 bits mediante tabla fija.
     \item Número (\texttt{00--99}), almacenado en 7 bits.
 \end{itemize}
 
 Este diseño reduce significativamente el coste respecto a la representación ASCII convencional.
 
+\paragraph{Campos categóricos con codificación Huffman}
+Los campos \texttt{Event} y \texttt{Opening} presentan un dominio grande pero con distribución de frecuencias muy sesgada: unos pocos valores concentran la mayoría de las apariciones. Por ello se utiliza codificación de Huffman con frecuencias extraídas de las partidas de ejemplo provistas, de modo que los valores más comunes reciben códigos más cortos. El centinela \texttt{UNKNOWN\_TEXT} se incluye como hoja de baja frecuencia en el árbol, permitiendo escapar a cadena UTF-8 cruda cuando el valor no está en el vocabulario conocido.
+
+El algoritmo de Huffman empleado sigue la construcción estándar de heap de mínimos, pero con dos diferencias respecto a una implementación básica. Los nodos del árbol son estructuras explícitas con referencias a sus hijos y al símbolo asociado, evitando comparaciones implícitas entre objetos heterogéneos. Los códigos se asignan mediante un recorrido en profundidad (DFS) sobre el árbol ya construido, acumulando el prefijo al descender (\texttt{0} rama izquierda, \texttt{1} rama derecha), en lugar de prefijar bits durante la propia fusión. Además, se utiliza un contador de desempate para garantizar que la codificación sea determinista cuando dos nodos tienen la misma frecuencia, asegurando reproducibilidad bit a bit.
+
 \paragraph{Campos temporales (Delta Encoding)}
 Los campos \texttt{UTCDate} y \texttt{UTCTime} se comprimen mediante codificación diferencial respecto a la partida anterior, explotando la localidad temporal de los datasets de torneos.
 
+\texttt{UTCDate} utiliza un esquema de tres niveles:
 \begin{itemize}
-    \item Las fechas se almacenan como deltas en el rango $[-63, +63]$ con offset de 63.
-    \item Las horas se codifican en segundos absolutos con posibilidad de delta similar.
+    \item \textbf{Mismo día:} prefijo \texttt{0} (1 bit total).
+    \item \textbf{Delta pequeño} $[-63, +63]$: prefijo \texttt{10} seguido de 7 bits con offset 63 (9 bits total).
+    \item \textbf{Fecha absoluta} (fuera de rango o primera partida): prefijo \texttt{11} seguido de la fecha completa en 16 bits (18 bits total).
+\end{itemize}
+
+\texttt{UTCTime} utiliza un esquema de dos niveles:
+\begin{itemize}
+    \item \textbf{Delta pequeño} $[-63, +63]$: prefijo \texttt{0} seguido de 7 bits con offset 63 (8 bits total).
+    \item \textbf{Tiempo absoluto} (fuera de rango o primera partida): prefijo \texttt{1} seguido de 17 bits de segundos del día (18 bits total).
 \end{itemize}
 
 Este esquema permite representar secuencias de partidas consecutivas con alta redundancia temporal de forma altamente eficiente.
@@ -134,7 +144,7 @@ Este mecanismo asegura compatibilidad hacia adelante con extensiones arbitrarias
 
 \subsubsection{Codificación de nombres de jugadores}
 
-El módulo \texttt{player\_names.py} implementa un esquema híbrido basado en diccionario incremental y codificación por entropía.
+La codificación de nombres de jugadores utiliza un esquema híbrido con diccionario incremental e inspiración en la familia LZ, pero con diferencias importantes respecto al LZ78 clásico.
 
 \begin{enumerate}
     \item \textbf{Primera aparición (flag 0):}
@@ -146,14 +156,17 @@ El módulo \texttt{player\_names.py} implementa un esquema híbrido basado en di
     Si el nombre contiene caracteres fuera del alfabeto permitido, se utiliza un mecanismo de escape basado en UTF-8.
 
     \item \textbf{Apariciones posteriores (flag 1):}
-    Se sustituye el nombre por su índice en un diccionario global incremental (modelo tipo LZ78). El número de bits necesarios se ajusta dinámicamente según:
+    Se sustituye el nombre por su índice en el diccionario global. El número de bits necesarios se ajusta dinámicamente según:
     \[
     \max\left(1, \left\lceil \log_2(N) \right\rceil\right)
     \]
     donde $N$ es el tamaño actual del diccionario.
 \end{enumerate}
 
-Este diseño explota la alta repetición de jugadores en archivos PGN de gran tamaño, reduciendo significativamente la entropía de este campo.
+\paragraph{Diferencias con LZ78}
+En el LZ78 clásico, la unidad de diccionario es una \textit{subcadena}: cada nueva entrada es la concatenación del prefijo más largo ya conocido con el siguiente carácter, y el token emitido es el par $(\text{índice de prefijo},\ \text{carácter nuevo})$. El diccionario crece con fragmentos de la propia secuencia de entrada.
+
+En el esquema de CPG5, la unidad de diccionario es el \textit{nombre completo del jugador}: la primera vez que aparece se codifica íntegramente con Huffman, y se le asigna un índice en el diccionario; las siguientes apariciones simplemente emiten ese índice. No existe la noción de prefijo parcial ni de extensión carácter a carácter. La similitud con LZ78 es conceptual: ambos mantienen un diccionario incremental que crece con la secuencia de entrada y permiten referenciar entradas anteriores con un índice de ancho creciente. La diferencia clave es la granularidad, que en CPG5 es la palabra completa en lugar del símbolo individual.
 
 \subsection{Codificación de Movimientos (Chess Logic)}
 
