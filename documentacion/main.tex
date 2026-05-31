@@ -188,28 +188,11 @@ Cada medio movimiento (\textit{ply}) se representa mediante dos componentes:
 
 \begin{enumerate}
 \item El índice del movimiento dentro de la lista de movimientos legales.
-\item Un bit adicional (\texttt{has\_annot}) que indica la presencia o ausencia de anotaciones asociadas.
+\item \textbf{(Opcional)} Un byte adicional (\texttt{has\_annot}) que indica la presencia o ausencia de anotaciones asociadas.
 \end{enumerate}
 
-Para una posición con $N$ movimientos legales, el número de bits necesarios para representar el índice es:
-
-\[
-w =
-\begin{cases}
-0 & \text{si } N=1 \\
-\left\lceil \log_2(N) \right\rceil & \text{si } N>1
-\end{cases}
-\]
-
-Por consiguiente, el coste total por ply es:
-
-[
-w + 1
-]
-
-bits.
-
-El flujo de bits resultante se concatena de forma continua para toda la partida y se rellena con ceros únicamente al final del bloque para garantizar alineamiento a byte.
+Cada posición tiene solo $N$ posibles movimientos legales, como máximo puede haber 218 de estos en cualquier posición legal.
+Aprovechamos esto para codificarlo todo de 8 en 8 bits, y marcar un potencial comentario como un byte con valor 254, al que no podrá llegar jamás con movimientos legales.
 
 \subsubsection{Codificación del Resultado}
 
@@ -338,6 +321,20 @@ Anotaciones & variable \\
 \end{center}
 
 El número de plies se almacena mediante un entero sin signo de 16 bits, permitiendo representar hasta 65,535 medios movimientos por partida, muy por encima de cualquier partida práctica.
+
+Aprovechando que todos los símbolos individuales se han codificado de 8 en 8 bits (exceptuando tamaño y número de plies), le pasamos una capa de Huffman encoding a todas las partidas.
+Esto es altamente eficaz, ya que elementos como los resultados, los movimientos empaquetados y algunas anotaciones, tienen una gran cantidad de elementos repetidos de manera irregular.
+
+\paragraph{Metodología}
+Para hacer esto se juntan todas las partidas en un solo conjunto de bytes, se usan las frecuencias de cada número de byte posible ((\texttt{0x00-0xFF})) y se genera un solo árbol listo para hacer Huffman, al terminar el encoding de todas las partidas se guarda:
+
+\begin{itemize}
+\item Longitud en bytes del árbol serializado
+\item El árbol de símbolos
+\item Todos los datos codificados
+\end{itemize}
+
+De tal manera que al descodificarlos, solo hace falta leer el árbol, descodificar los datos y comenzar a leer partida por partida.
 
 \subsubsection{Formato Global CPG5}
 
@@ -562,6 +559,36 @@ Esto convierte el formato en un sistema completamente reproducible y apto para c
 
 
 \section{Conclusiones}
+
+
+
+Se han probado gran cantidad de métodos para la codificación de partidas, en un principio aprovechando la simulación usada para limitar el tamaño en bits de cada movimiento:
+Para una posición con $N$ movimientos legales, el número de bits necesarios para representar el índice es:
+
+\[
+w =
+\begin{cases}
+0 & \text{si } N=1 \\
+\left\lceil \log_2(N) \right\rceil & \text{si } N&gt;1
+\end{cases}
+\]
+
+Por consiguiente, el coste total por ply es:
+
+[
+w + 1
+]
+
+bits.
+\\\\
+También se intentó codificar el conjunto de datos usando un \textbf{Burrows-Wheeler} que junto con un \textbf{MtF} pudiese juntar todos los elementos frecuentemente repetidos.
+\\
+Sin embargo, incluso utilizando este sistema, probando a comprimir el resultado con diccionarios \textbf{LZ78} y \textbf{RiceCode} (para aprovechar todos los 0s y 1s generados por el MtF), no se consiguió una mejora tan grande como simplemente aplicando un Huffman con un árbol personalizado para todas las partidas a la vez.
+\\\\
+Estos métodos no solo eran algo más lentos, sino que al tener muchos caracteres repetidos, pero no demasiadas secuencias de exactamente los mismos caracteres, o substrings repetidas, no llegaron a su máximo potencial.
+Con esto nos dimos cuenta de que a menudo, con datos que no tienen una estructura muy específica, pero si contienen muchos símbolos repetidos, es más importante probar métodos más sencillos.
+\\\\
+Tras probar codificación aritmética y Huffman con diccionario fijo, encontramos una solución más sencilla de la que esperábamos usando un Huffman con diccionario generado. 
 
 
 \newpage
